@@ -1,0 +1,92 @@
+name: Android CI
+
+# 触发条件：push 到 main 分支、向 main 提 PR，或在 Actions 页面手动点运行
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  # 第一步单独编 ffmpeg：编一次十来分钟，build.sh 不变就直接用缓存。
+  # 拆成单独的 job，是为了 App 编译失败时 ffmpeg 的缓存照样能存下来。
+  ffmpeg:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 恢复 ffmpeg 缓存
+        id: ffcache
+        uses: actions/cache@v4
+        with:
+          path: ffmpeg-android/out
+          key: ffmpeg-arm64-${{ hashFiles('ffmpeg-android/build.sh') }}
+
+      - name: 编译 ffmpeg（arm64）
+        if: steps.ffcache.outputs.cache-hit != 'true'
+        run: bash ffmpeg-android/build.sh
+
+      - name: 交给下一步
+        uses: actions/upload-artifact@v4
+        with:
+          name: ffmpeg-arm64
+          path: ffmpeg-android/out/ffmpeg
+          retention-days: 1
+          if-no-files-found: error
+
+  build:
+    needs: ffmpeg
+    runs-on: ubuntu-latest
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 取 ffmpeg
+        uses: actions/download-artifact@v4
+        with:
+          name: ffmpeg-arm64
+          path: ffmpeg-bin
+
+      - name: 放进 jniLibs
+        run: |
+          mkdir -p app/src/main/jniLibs/arm64-v8a
+          cp ffmpeg-bin/ffmpeg app/src/main/jniLibs/arm64-v8a/libffmpeg.so
+          ls -la app/src/main/jniLibs/arm64-v8a
+
+      - name: 配置 JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 配置 Gradle（带缓存，加速后续构建）
+        uses: gradle/actions/setup-gradle@v3
+
+      - name: 赋予 gradlew 执行权限
+        run: chmod +x ./gradlew
+
+      - name: 编译正式版 APK
+        run: ./gradlew assembleRelease --stacktrace
+
+      # 从 app/build.gradle.kts 的 versionName 读版本号，用于产物命名
+      - name: 读取版本号
+        run: echo "APP_VERSION=$(grep -oP 'versionName = "\K[^"]+' app/build.gradle.kts)" >> "$GITHUB_ENV"
+
+      - name: 按版本号命名 APK
+        run: |
+          mkdir -p dist
+          cp app/build/outputs/apk/release/*.apk "dist/KAudio-${APP_VERSION}.apk"
+          ls -la dist
+
+      # 下载得到 KAudio-<版本>.zip，里面是 KAudio-<版本>.apk
+      - name: 上传 APK 产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: KAudio-${{ env.APP_VERSION }}
+          path: dist/KAudio-*.apk
+          if-no-files-found: error

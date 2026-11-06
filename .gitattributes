@@ -1,0 +1,13 @@
+# 统一文本换行，杜绝 Windows CRLF 污染 Linux 构建机
+* text=auto eol=lf
+
+# gradlew 必须 LF，否则 CI 上 ./gradlew 报 bad interpreter
+gradlew text eol=lf
+gradlew.bat text eol=crlf
+
+# 二进制勿转换
+*.jar binary
+*.png binary
+*.jpg binary
+*.keystore binary
+*.jks binary

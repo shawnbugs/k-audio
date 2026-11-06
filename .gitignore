@@ -1,0 +1,31 @@
+# Gradle
+.gradle/
+build/
+app/build/
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+local.properties
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Keystore (切勿提交签名密钥)
+*.jks
+*.keystore
+# 例外：固定的调试签名，仅用于让每次 CI 构建可覆盖安装（非发布密钥）
+!app/debug.keystore
+
+# ffmpeg 由 CI 现编，不进仓库
+app/src/main/jniLibs/
+ffmpeg-android/work/
+ffmpeg-android/out/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# CI 发布目录 / 本地下载的 APK
+dist/
+apk/
