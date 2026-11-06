@@ -9,7 +9,7 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.lightColorScheme
+import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
@@ -21,23 +21,26 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         Studio.init(this)
-        // 只有浅色一套，系统栏图标固定深色
+        // 只有深色一套，系统栏图标固定浅色
         enableEdgeToEdge(
-            statusBarStyle = SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT),
-            navigationBarStyle = SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT),
+            statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
         )
         if (savedInstanceState == null) handleIncoming(intent)
         setContent {
             // 界面基本自绘，这套配色只管 Material 组件（弹框、输入框、下拉菜单）
             MaterialTheme(
-                colorScheme = lightColorScheme(
+                colorScheme = darkColorScheme(
                     primary = A.Brand,
-                    onPrimary = androidx.compose.ui.graphics.Color.White,
+                    onPrimary = A.OnBrand,
                     primaryContainer = A.BrandSoft,
                     onPrimaryContainer = A.Brand,
+                    secondary = A.Violet,
                     secondaryContainer = A.BrandSoft,
                     onSecondaryContainer = A.Brand,
+                    error = A.Red,
                     background = A.Bg,
+                    onBackground = A.Text1,
                     surface = A.Card,
                     onSurface = A.Text1,
                     onSurfaceVariant = A.Text2,

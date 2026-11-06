@@ -25,48 +25,59 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
 /*
- * K剪音的配色照 K功课：米色底 + 白卡片 + 赭金色；波形区用暖深色底（同 PC 版暗色波形，看得清）。
+ * K剪音自己的风格（0.2.0 起不再照 K功课）：深色「录音棚」——墨黑底 + 深灰卡片 + 薄荷青主色，紫色做第二色（淡入淡出）。
+ * 卡片小圆角加细边，按钮是方圆角而不是胶囊，偏专业工具的感觉。
  * 数字一律等宽（tnum），播放时时间不跳。
  */
 object A {
-    val Bg = Color(0xFFF7F3EC)
-    val Card = Color(0xFFFFFFFF)
-    val Field = Color(0xFFF2EDE4)
-    val Line = Color(0xFFECE5DA)
-    val Text1 = Color(0xFF2A2118)
-    val Text2 = Color(0xFF6B5E4E)
-    val Text3 = Color(0xFFA59886)
-    val Brand = Color(0xFFC2782A)
-    val BrandSoft = Color(0xFFF8EAD8)
-    val Red = Color(0xFFD9483B)
-    val Green = Color(0xFF3E9A5B)
+    val Bg = Color(0xFF0F1115)
+    val Card = Color(0xFF171A20)
+    val Field = Color(0xFF22262E)
+    val Line = Color(0xFF2B3039)
+    val Text1 = Color(0xFFECEFF4)
+    val Text2 = Color(0xFFA3AAB7)
+    val Text3 = Color(0xFF6B7380)
+    val Brand = Color(0xFF36D6B0)
+    /** 薄荷青底上的字（深色才看得清） */
+    val OnBrand = Color(0xFF06231C)
+    val BrandSoft = Color(0xFF14332D)
+    val Violet = Color(0xFF9B8CFF)
+    val Red = Color(0xFFFF6B6B)
+    val Green = Color(0xFF4ADE80)
 
     val Num = TextStyle(fontFeatureSettings = "tnum")
 }
 
 /** 波形区配色 */
 object W {
-    val Bg = Color(0xFF26201A)
-    val Ruler = Color(0xFF1D1813)
-    val Wave = Color(0xFFF2B544)
-    val WaveDim = Color(0xFF7D6A4F)
-    val Clip = Color(0xFFFF5A4E)
-    val Sel = Color(0xFFF2B544)
-    val Playhead = Color(0xFFFF6B5E)
-    val Fade = Color(0xFFFFD678)
-    val Tick = Color(0xFFA59886)
-    val Grid = Color(0x16FFFFFF)
+    val Bg = Color(0xFF0A0C10)
+    val Ruler = Color(0xFF07080B)
+    val Wave = Color(0xFF36D6B0)
+    val WaveDim = Color(0xFF2A5048)
+    val Clip = Color(0xFFFF6B6B)
+    val Sel = Color(0xFF36D6B0)
+    val Playhead = Color(0xFFFF5C8A)
+    val Fade = Color(0xFF9B8CFF)
+    val Tick = Color(0xFF6B7380)
+    val Grid = Color(0x14FFFFFF)
     val Cut = Color(0xAAFFFFFF)
-    val Msg = Color(0xFFCDBFA9)
+    val Msg = Color(0xFFA3AAB7)
+    /** 选区时长标签上的字 */
+    val OnSel = Color(0xFF06231C)
+    /** 淡入淡出控制块（没按住时） */
+    val Handle = Color(0xFFD5DAE3)
+    /** 浮动标签的底 */
+    val Tip = Color(0xE6050608)
 }
 
 fun Modifier.card(): Modifier = this
     .padding(horizontal = 12.dp, vertical = 5.dp)
     .fillMaxWidth()
-    .clip(RoundedCornerShape(16.dp))
+    .clip(RoundedCornerShape(12.dp))
     .background(A.Card)
+    .border(1.dp, A.Line, RoundedCornerShape(12.dp))
 
-/** 胶囊按钮：primary = 品牌色实心，否则浅底；禁用时半透明 */
+/** 按钮（方圆角）：primary = 薄荷青实心深字，否则深灰底；禁用时半透明 */
 @Composable
 fun Pill(
     text: String,
@@ -80,14 +91,14 @@ fun Pill(
 ) {
     val bg = if (primary) A.Brand else A.Field
     val fg = when {
-        primary -> Color.White
+        primary -> A.OnBrand
         danger -> A.Red
         else -> A.Text1
     }
     Box(
         modifier
             .height(height)
-            .clip(RoundedCornerShape(height / 2))
+            .clip(RoundedCornerShape(10.dp))
             .background(bg)
             .alpha(if (enabled) 1f else 0.38f)
             .clickable(enabled = enabled, onClick = onClick)

@@ -1,46 +1,49 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 波形 + 选区：中间三根金琥珀渐变的高条是选中的部分，两侧赭红竖线是选区边；配色照 K功课。108 画布，可见区为中间 72 -->
+<!-- 一刀切开的声波：左段薄荷青、右段紫色，中间一道白色斜刀口。108 画布，内容都在中心半径 33 以内 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- 选区底色 -->
+    <!-- 左段声波 -->
     <path
-        android:fillColor="#26D0782A"
-        android:pathData="M43.5,26h21v56h-21z" />
-    <!-- 选区外的波形（淡） -->
-    <path
-        android:fillColor="#FFE6CFA6"
-        android:pathData="M23.8,49a2.2,2.2 0,0 1,4.4 0v10a2.2,2.2 0,0 1,-4.4 0z
-            M30.8,44a2.2,2.2 0,0 1,4.4 0v20a2.2,2.2 0,0 1,-4.4 0z
-            M37.8,46a2.2,2.2 0,0 1,4.4 0v16a2.2,2.2 0,0 1,-4.4 0z
-            M65.8,45a2.2,2.2 0,0 1,4.4 0v18a2.2,2.2 0,0 1,-4.4 0z
-            M72.8,42a2.2,2.2 0,0 1,4.4 0v24a2.2,2.2 0,0 1,-4.4 0z
-            M79.8,49a2.2,2.2 0,0 1,4.4 0v10a2.2,2.2 0,0 1,-4.4 0z" />
-    <!-- 选中的波形 -->
-    <path android:pathData="M44.8,37a2.2,2.2 0,0 1,4.4 0v34a2.2,2.2 0,0 1,-4.4 0z
-            M51.8,32a2.2,2.2 0,0 1,4.4 0v44a2.2,2.2 0,0 1,-4.4 0z
-            M58.8,40a2.2,2.2 0,0 1,4.4 0v28a2.2,2.2 0,0 1,-4.4 0z">
-        <aapt:attr name="android:fillColor">
+        android:pathData="M22,54C24.52,46 26.48,46 29,54C31.52,70 33.48,70 36,54C38.52,32.67 40.48,32.67 43,54C45.52,67.33 47.48,67.33 50,54"
+        android:strokeWidth="4.6"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round">
+        <aapt:attr name="android:strokeColor">
             <gradient
-                android:endColor="#FFD0782A"
-                android:endX="54"
-                android:endY="78"
-                android:startColor="#FFF2B544"
-                android:startX="54"
-                android:startY="30"
+                android:endColor="#FF2BBF9E"
+                android:endX="50"
+                android:endY="54"
+                android:startColor="#FF6EF5D2"
+                android:startX="22"
+                android:startY="54"
                 android:type="linear" />
         </aapt:attr>
     </path>
-    <!-- 选区两条边 + 底部拖柄 -->
+    <!-- 右段声波 -->
     <path
-        android:pathData="M43.5,26V82M64.5,26V82"
-        android:strokeWidth="2.2"
-        android:strokeColor="#FFB4552E"
+        android:pathData="M58,54C60.52,35.33 62.48,35.33 65,54C67.52,75.33 69.48,75.33 72,54C74.52,40.67 76.48,40.67 79,54C81.52,60.67 83.48,60.67 86,54"
+        android:strokeWidth="4.6"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round">
+        <aapt:attr name="android:strokeColor">
+            <gradient
+                android:endColor="#FF7C6CF0"
+                android:endX="86"
+                android:endY="54"
+                android:startColor="#FFB8ADFF"
+                android:startX="58"
+                android:startY="54"
+                android:type="linear" />
+        </aapt:attr>
+    </path>
+    <!-- 刀口 -->
+    <path
+        android:pathData="M59.5,29L48.5,79"
+        android:strokeWidth="3"
+        android:strokeColor="#FFFFFFFF"
         android:strokeLineCap="round" />
-    <path
-        android:fillColor="#FFB4552E"
-        android:pathData="M43.5,82m-3,0a3,3 0,1 0,6 0a3,3 0,1 0,-6 0M64.5,82m-3,0a3,3 0,1 0,6 0a3,3 0,1 0,-6 0" />
 </vector>

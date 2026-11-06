@@ -416,7 +416,7 @@ private fun DrawScope.drawSelection(w: WaveModel, tm: TextMeasurer, x1: Float, x
     drawCircle(W.Sel, Dim.grip.toPx(), Offset(x1, gy))
     drawCircle(W.Sel, Dim.grip.toPx(), Offset(x2, gy))
     val tag = fmtTime(w.selEnd - w.selStart)
-    val layout = tm.measure(tag, TextStyle(color = Color(0xFF26201A), fontSize = 11.sp, fontFeatureSettings = "tnum"))
+    val layout = tm.measure(tag, TextStyle(color = W.OnSel, fontSize = 11.sp, fontFeatureSettings = "tnum"))
     val tw = layout.size.width + 10.dp.toPx()
     val th = layout.size.height + 2.dp.toPx()
     if (x2 - x1 > tw + 2 * Dim.grip.toPx() + 12.dp.toPx()) {
@@ -443,7 +443,7 @@ private fun DrawScope.drawHandle(tm: TextMeasurer, x: Float, y: Float, active: B
     val s = Dim.handle.toPx()
     if (x < -s || x > size.width + s) return
     drawRoundRect(
-        if (active) W.Sel else Color(0xFFEBE6DC),
+        if (active) W.Fade else W.Handle,
         topLeft = Offset(x - s / 2, y - s / 2),
         size = Size(s, s),
         cornerRadius = CornerRadius(3.dp.toPx()),
@@ -455,6 +455,6 @@ private fun DrawScope.drawHandle(tm: TextMeasurer, x: Float, y: Float, active: B
     val bh = layout.size.height + 4.dp.toPx()
     val bx = (if (labelRight) x + s else x - s - bw).coerceIn(0f, max(0f, size.width - bw))
     val by = y + s
-    drawRoundRect(Color(0xE6141210), topLeft = Offset(bx, by), size = Size(bw, bh), cornerRadius = CornerRadius(5.dp.toPx()))
+    drawRoundRect(W.Tip, topLeft = Offset(bx, by), size = Size(bw, bh), cornerRadius = CornerRadius(5.dp.toPx()))
     drawText(layout, topLeft = Offset(bx + pad, by + 2.dp.toPx()))
 }
