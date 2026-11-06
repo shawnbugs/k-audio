@@ -1,0 +1,73 @@
+package com.shawnbugs.kaudio.core
+
+class FormatInfo(val name: String, val ext: String, val codec: String, val lossless: Boolean, val copy: Boolean)
+
+object Formats {
+    val list = listOf(
+        FormatInfo("MP3", ".mp3", "libmp3lame", false, false),
+        FormatInfo("WAV (PCM 16bit)", ".wav", "pcm_s16le", true, false),
+        FormatInfo("FLAC (无损)", ".flac", "flac", true, false),
+        FormatInfo("M4A (AAC)", ".m4a", "aac", false, false),
+        FormatInfo("OGG (Vorbis)", ".ogg", "libvorbis", false, false),
+        FormatInfo("OPUS", ".opus", "libopus", false, false),
+        FormatInfo("WMA", ".wma", "wmav2", false, false),
+        FormatInfo("保持原格式", "", "copy", false, true),
+    )
+    val rates = listOf("原始", "8000", "11025", "12000", "16000", "22050", "24000", "32000", "44100", "48000", "96000")
+    val bitrates = listOf("默认", "32k", "48k", "64k", "96k", "128k", "160k", "192k", "256k", "320k")
+    val channels = listOf("原始", "单声道", "立体声")
+
+    /** 纯音频容器：「保持原格式」时沿用原扩展名 */
+    private val audioExts = setOf(
+        ".mp3", ".wav", ".flac", ".m4a", ".aac", ".ogg", ".opus", ".wma", ".amr", ".aiff", ".aif", ".ac3", ".mka", ".m4b",
+    )
+
+    /** 剪辑/加效果后需要重新编码时，这些扩展名 ffmpeg 有默认编码器；其余改存 FLAC（同 PC 版） */
+    private val reencodable = setOf(
+        ".mp3", ".wav", ".flac", ".m4a", ".aac", ".ogg", ".opus", ".wma", ".aiff", ".aif", ".ac3", ".mka",
+    )
+
+    /**
+     * 「保持原格式」的输出扩展名。
+     * PC 版直接用源扩展名；手机上视频文件（mp4/mkv…）不能存进「音乐」，所以视频按音轨编码选一个音频扩展名
+     * （aac → m4a、mp3 → mp3…），等于「提取原音轨」。
+     */
+    fun keepExt(srcExt: String, audio: String?, reencode: Boolean): String {
+        var ext = srcExt.lowercase()
+        if (ext == ".m4b") ext = ".m4a"
+        if (ext in audioExts) return if (reencode && ext !in reencodable) ".flac" else ext
+        val codec = audio?.substringBefore(' ')?.substringBefore(',')?.lowercase() ?: ""
+        val byCodec = when {
+            codec == "aac" || codec == "alac" -> ".m4a"
+            codec == "mp3" -> ".mp3"
+            codec == "opus" -> ".opus"
+            codec == "vorbis" -> ".ogg"
+            codec == "flac" -> ".flac"
+            codec == "ac3" -> ".ac3"
+            codec.startsWith("pcm_") -> ".wav"
+            codec.startsWith("wma") -> ".wma"
+            codec.startsWith("amr") -> ".amr"
+            else -> ".mka"   // Matroska 什么编码都能装
+        }
+        return if (reencode && byCodec !in reencodable) ".flac" else byCodec
+    }
+
+    /** 存进 MediaStore 用的 MIME（必须是 audio/*，系统才让放进「音乐」） */
+    fun mime(ext: String): String = when (ext.lowercase()) {
+        ".mp3" -> "audio/mpeg"
+        ".wav" -> "audio/x-wav"
+        ".flac" -> "audio/flac"
+        ".m4a" -> "audio/mp4"
+        ".aac" -> "audio/aac"
+        ".ogg", ".opus" -> "audio/ogg"
+        ".wma" -> "audio/x-ms-wma"
+        ".amr" -> "audio/amr"
+        ".aiff", ".aif" -> "audio/x-aiff"
+        ".ac3" -> "audio/ac3"
+        ".mka" -> "audio/x-matroska"
+        else -> "audio/*"
+    }
+
+    /** 能分享进来/选择的文件 MIME */
+    val pickMimes = arrayOf("audio/*", "video/*")
+}

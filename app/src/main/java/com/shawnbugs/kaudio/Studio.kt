@@ -1,0 +1,694 @@
+package com.shawnbugs.kaudio
+
+import android.content.ContentValues
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
+import android.os.Handler
+import android.os.Looper
+import android.provider.MediaStore
+import android.provider.OpenableColumns
+import android.webkit.MimeTypeMap
+import android.widget.Toast
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.mutableStateListOf
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.core.content.ContextCompat
+import com.shawnbugs.kaudio.core.EditState
+import com.shawnbugs.kaudio.core.Ffmpeg
+import com.shawnbugs.kaudio.core.FormatInfo
+import com.shawnbugs.kaudio.core.Formats
+import com.shawnbugs.kaudio.core.PREVIEW_RATE
+import com.shawnbugs.kaudio.core.PcmPlayer
+import com.shawnbugs.kaudio.core.Peaks
+import com.shawnbugs.kaudio.core.fmtTime
+import com.shawnbugs.kaudio.core.readPeaks
+import java.io.File
+import java.util.concurrent.Executors
+import kotlin.concurrent.thread
+import kotlin.math.abs
+import kotlin.math.max
+import kotlin.math.min
+import kotlin.math.roundToInt
+
+/** 列表里的一个文件。path 是复制到 App 缓存里的副本（ffmpeg 只认真实路径） */
+class FileItem(val id: Long, val name: String, val size: Long, val path: File, val audio: String?) {
+    var duration = -1.0                 // 导入时探测，打开波形后换成解码出的精确值
+    var edit: EditState? = null         // 各自的编辑结果，没打开过为 null（导出整段）
+    val undo = ArrayList<EditState>()
+    val redo = ArrayList<EditState>()
+    var rev by mutableIntStateOf(0)     // 列表条目刷新用
+        private set
+
+    fun touch() { rev++ }
+    val edited: Boolean get() = edit?.isOriginal(duration) == false
+    val ext: String get() = name.substringAfterLast('.', "").let { if (it.isEmpty()) "" else ".$it" }.lowercase()
+    val baseName: String get() = name.substringBeforeLast('.').ifEmpty { name }
+}
+
+class ExportItem(val name: String, val baseName: String, val ext: String, val path: File, val edit: EditState?, val srcDur: Double, val audio: String?)
+
+class Job(val fmt: FormatInfo, val channels: Int, val rate: String?, val bitrate: String?, val items: List<ExportItem>)
+
+class ExportResult(val name: String, val uri: Uri, val mime: String, val where: String)
+
+/*
+ * 全 App 共用的状态和操作（对应 PC 版 MainForm 的逻辑部分）。
+ * 界面状态只在主线程改；后台线程（导入、解码、导出）通过 main.post 回到主线程。
+ */
+object Studio {
+    const val OUT_DIR = "K剪音"
+
+    lateinit var app: Context
+        private set
+    private val main = Handler(Looper.getMainLooper())
+    private val io = Executors.newSingleThreadExecutor()
+    private var inited = false
+    private var nextId = 1L
+
+    val files = mutableStateListOf<FileItem>()
+    var current by mutableStateOf<FileItem?>(null)
+        private set
+    val wave = WaveModel()
+    var info by mutableStateOf("")
+        private set
+    var importing by mutableIntStateOf(0)
+        private set
+    val logs = mutableStateListOf<String>()
+
+    // 试听
+    private val player = PcmPlayer()
+    var playing by mutableStateOf(false)
+        private set
+    private var playFrom = 0.0
+    private var tempWav: File? = null
+    private var tempOff = 0L
+    @Volatile private var loadSeq = 0
+    @Volatile private var decodeProc: Process? = null
+
+    // 导出参数（记住上次的选择）
+    var fmtIdx by mutableIntStateOf(0)
+    var rateIdx by mutableIntStateOf(0)
+    var bitrateIdx by mutableIntStateOf(0)
+    var chIdx by mutableIntStateOf(0)
+
+    // 导出
+    var exporting by mutableStateOf(false)
+        private set
+    var progress by mutableFloatStateOf(0f)
+        private set
+    var progressText by mutableStateOf("")
+        private set
+    val results = mutableStateListOf<ExportResult>()
+    @Volatile var pendingJob: Job? = null
+    @Volatile private var cancelExport = false
+    @Volatile private var exportProc: Process? = null
+
+    fun init(ctx: Context) {
+        if (inited) return
+        inited = true
+        app = ctx.applicationContext
+        // 上次留下的副本、试听缓存、导出中间文件（新进程里不可能有正在用的）
+        File(app.cacheDir, "in").deleteRecursively()
+        File(app.cacheDir, "out").deleteRecursively()
+        app.cacheDir.listFiles { f -> f.name.startsWith("preview_") }?.forEach { it.delete() }
+        val sp = prefs()
+        fmtIdx = Formats.list.indexOfFirst { it.name == sp.getString("format", null) }.coerceAtLeast(0)
+        rateIdx = Formats.rates.indexOf(sp.getString("rate", null)).coerceAtLeast(0)
+        bitrateIdx = Formats.bitrates.indexOf(sp.getString("bitrate", null)).coerceAtLeast(0)
+        chIdx = Formats.channels.indexOf(sp.getString("channels", null)).coerceAtLeast(0)
+        if (!Ffmpeg.available(app)) log("找不到内置的 ffmpeg，安装包可能不完整")
+    }
+
+    private fun prefs() = app.getSharedPreferences("kaudio", Context.MODE_PRIVATE)
+
+    fun saveSettings() {
+        prefs().edit()
+            .putString("format", Formats.list[fmtIdx].name)
+            .putString("rate", Formats.rates[rateIdx])
+            .putString("bitrate", Formats.bitrates[bitrateIdx])
+            .putString("channels", Formats.channels[chIdx])
+            .apply()
+    }
+
+    fun log(msg: String) {
+        if (Looper.myLooper() != Looper.getMainLooper()) { main.post { log(msg) }; return }
+        logs.add(msg)
+        while (logs.size > 300) logs.removeAt(0)
+    }
+
+    fun toast(msg: String) {
+        main.post { Toast.makeText(app, msg, Toast.LENGTH_SHORT).show() }
+    }
+
+    // ================= 文件列表 =================
+
+    fun importUris(uris: List<Uri>) {
+        if (uris.isEmpty()) return
+        if (exporting) { toast("正在导出，等导出完再添加"); return }
+        importing += uris.size
+        io.execute {
+            for (u in uris) {
+                var name = "?"
+                try {
+                    val (n, size) = queryNameSize(u)
+                    name = n
+                    if (files.toList().any { it.name == name && it.size == size && size >= 0 }) {
+                        log("已在列表里：$name")
+                        continue
+                    }
+                    val id = synchronized(this) { nextId++ }
+                    val dir = File(app.cacheDir, "in/$id").apply { mkdirs() }
+                    val f = File(dir, name.replace('/', '_'))
+                    val ins = app.contentResolver.openInputStream(u) ?: throw IllegalStateException("打不开")
+                    ins.use { i -> f.outputStream().use { o -> i.copyTo(o, 1 shl 16) } }
+                    val probe = Ffmpeg.probe(app, f.path)
+                    if (probe.audio == null) {
+                        dir.deleteRecursively()
+                        log("× $name：没有找到音轨")
+                        toast("「$name」里没有声音")
+                        continue
+                    }
+                    val item = FileItem(id, name, f.length(), f, probe.audio).apply { duration = probe.duration }
+                    main.post {
+                        files.add(item)
+                        if (current == null) select(item)
+                    }
+                } catch (e: Exception) {
+                    log("× 导入失败：$name  ${e.message ?: e.javaClass.simpleName}")
+                } finally {
+                    main.post { importing-- }
+                }
+            }
+        }
+    }
+
+    private fun queryNameSize(u: Uri): Pair<String, Long> {
+        var name: String? = null
+        var size = -1L
+        try {
+            app.contentResolver.query(u, arrayOf(OpenableColumns.DISPLAY_NAME, OpenableColumns.SIZE), null, null, null)?.use { c ->
+                if (c.moveToFirst()) {
+                    val ni = c.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+                    val si = c.getColumnIndex(OpenableColumns.SIZE)
+                    if (ni >= 0 && !c.isNull(ni)) name = c.getString(ni)
+                    if (si >= 0 && !c.isNull(si)) size = c.getLong(si)
+                }
+            }
+        } catch (_: Exception) { }
+        if (name.isNullOrBlank()) name = u.lastPathSegment?.substringAfterLast('/')
+        if (name.isNullOrBlank()) name = "audio_${System.currentTimeMillis()}"
+        return name!! to size
+    }
+
+    fun select(item: FileItem) {
+        if (item == current) return
+        loadWave(item)
+    }
+
+    fun remove(item: FileItem) {
+        if (exporting) return
+        val i = files.indexOf(item)
+        if (i < 0) return
+        if (item == current) unload(true)
+        files.removeAt(i)
+        item.path.parentFile?.deleteRecursively()
+        if (current == null && files.isNotEmpty()) select(files[min(i, files.size - 1)])
+    }
+
+    fun clearAll() {
+        if (exporting) return
+        unload(true)
+        files.forEach { it.path.parentFile?.deleteRecursively() }
+        files.clear()
+    }
+
+    // ================= 波形加载 =================
+
+    private fun unload(resetUi: Boolean) {
+        player.stop()
+        playing = false
+        loadSeq++  // 让进行中的解码作废
+        val p = decodeProc
+        decodeProc = null
+        Ffmpeg.kill(p)
+        tempWav?.delete()
+        tempWav = null
+        if (!resetUi) return
+        current = null
+        info = ""
+        wave.reset(WaveModel.EMPTY_MSG)
+    }
+
+    private fun loadWave(item: FileItem) {
+        unload(false)
+        current = item
+        val seq = ++loadSeq
+        info = ""
+        wave.reset("正在读取音频…")
+        if (!Ffmpeg.available(app)) { wave.reset("找不到内置的 ffmpeg"); return }
+        if (!item.path.exists()) { wave.reset("文件不存在了，请重新添加"); return }
+
+        val tmp = File(app.cacheDir, "preview_$seq.wav")
+        val args = listOf(
+            "-hide_banner", "-nostdin", "-y", "-i", item.path.path,
+            "-vn", "-sn", "-dn", "-ac", "2", "-ar", "$PREVIEW_RATE", "-c:a", "pcm_s16le", "-map_metadata", "-1",
+            "-progress", "pipe:1", "-nostats", tmp.path,
+        )
+        thread(isDaemon = true) {
+            var last = ""
+            val code = try {
+                Ffmpeg.run(
+                    app, args,
+                    started = { p -> decodeProc = p; if (seq != loadSeq) Ffmpeg.kill(p) },
+                    onErr = { line -> if (line.isNotBlank()) last = line.trim() },
+                    onTime = { t ->
+                        val d = item.duration
+                        if (d > 0) {
+                            val pct = min(99, (t / d * 100).toInt())
+                            main.post { if (seq == loadSeq) wave.reset("正在解码音频 $pct%") }
+                        }
+                    },
+                )
+            } catch (e: Exception) { last = e.message ?: e.toString(); -1 }
+
+            var peaks: Peaks? = null
+            if (code == 0 && seq == loadSeq) {
+                try { peaks = readPeaks(tmp, PREVIEW_RATE / 100) { seq != loadSeq } } catch (e: Exception) { last = e.message ?: e.toString() }
+            }
+            main.post {
+                if (seq != loadSeq) { tmp.delete(); return@post }
+                decodeProc = null
+                val p = peaks
+                if (p == null || p.frames <= 0) {
+                    tmp.delete()
+                    wave.reset("无法读取这个文件\n$last")
+                    return@post
+                }
+                tempWav = tmp
+                tempOff = p.dataOffset
+                item.duration = p.frames / PREVIEW_RATE.toDouble()
+                if (item.edit == null) item.edit = EditState(item.duration)
+                wave.setData(p, item.edit!!)
+                info = "原始时长 ${fmtTime(item.duration)}" + (item.audio?.let { "  ·  $it" } ?: "")
+                item.touch()
+            }
+        }
+    }
+
+    // ================= 编辑 =================
+
+    private val ready: Boolean get() = wave.loaded && current?.edit != null
+
+    fun pushUndo() {
+        val c = current ?: return
+        val e = c.edit ?: return
+        c.undo.add(e.clone())
+        if (c.undo.size > 200) c.undo.removeAt(0)
+        c.redo.clear()
+        wave.invalidate()
+    }
+
+    /** 编辑后刷新界面；结构变化（删除/裁剪/剪辑点/撤销）会先停止试听 */
+    private fun afterEdit(structural: Boolean) {
+        val c = current ?: return
+        if (structural && playing) pausePlay()
+        wave.setEdit(c.edit!!)
+        c.touch()
+    }
+
+    /** 在播放头处加剪辑点；有选区时在选区两端各加一个 */
+    fun split() {
+        if (!ready) return
+        val c = current!!
+        val e = c.edit!!.clone()
+        val any = if (wave.hasSel) e.splitAt(wave.selStart) or e.splitAt(wave.selEnd) else e.splitAt(currentPos())
+        if (!any) { toast("这里已经有剪辑点（或在开头/结尾）"); return }
+        pushUndo()
+        c.edit = e
+        afterEdit(true)
+    }
+
+    fun deleteSel() {
+        if (!ready) return
+        if (!wave.hasSel) { toast("先在波形上拖动框选要删除的部分"); return }
+        if (wave.selStart <= 0.001 && wave.selEnd >= wave.duration - 0.001) { toast("不能删除全部内容"); return }
+        val a = wave.selStart
+        pushUndo()
+        current!!.edit!!.delete(a, wave.selEnd)
+        wave.selStart = -1.0; wave.selEnd = -1.0
+        wave.playhead = a
+        afterEdit(true)
+    }
+
+    fun cropSel() {
+        if (!ready || !wave.hasSel) return
+        pushUndo()
+        current!!.edit!!.crop(wave.selStart, wave.selEnd)
+        wave.selStart = -1.0; wave.selEnd = -1.0
+        wave.playhead = 0.0
+        afterEdit(true)
+        wave.zoomAll()
+    }
+
+    fun undoRedo(undo: Boolean) {
+        if (!ready) return
+        val c = current!!
+        val from = if (undo) c.undo else c.redo
+        val to = if (undo) c.redo else c.undo
+        if (from.isEmpty()) return
+        to.add(c.edit!!)
+        c.edit = from.removeAt(from.size - 1)
+        wave.selStart = -1.0; wave.selEnd = -1.0
+        afterEdit(true)
+    }
+
+    val canUndo: Boolean get() = ready && current!!.undo.isNotEmpty()
+    val canRedo: Boolean get() = ready && current!!.redo.isNotEmpty()
+    val hasFx: Boolean get() = ready && current!!.edit!!.hasFx
+
+    fun stepGain(db: Int) {
+        if (!ready) return
+        pushUndo()
+        val e = current!!.edit!!
+        e.gainDb = (Math.round(e.gainDb) + db).toDouble().coerceIn(-40.0, 20.0)
+        afterEdit(false)
+    }
+
+    fun resetFx() {
+        if (!ready || !hasFx) return
+        pushUndo()
+        val e = current!!.edit!!
+        e.gainDb = 0.0; e.fadeIn = 0.0; e.fadeOut = 0.0
+        afterEdit(false)
+    }
+
+    /** 输入框改音量/淡入/淡出（null = 不改） */
+    fun applyFx(gain: Double?, fadeIn: Double?, fadeOut: Double?) {
+        if (!ready) return
+        val e = current!!.edit!!
+        val g = (gain ?: e.gainDb).coerceIn(-40.0, 20.0)
+        val l = e.length
+        val fi = (fadeIn ?: e.fadeIn).coerceIn(0.0, l)
+        val fo = (fadeOut ?: e.fadeOut).coerceIn(0.0, max(0.0, l - fi))
+        if (abs(g - e.gainDb) < 1e-6 && abs(fi - e.fadeIn) < 1e-6 && abs(fo - e.fadeOut) < 1e-6) return
+        pushUndo()
+        e.gainDb = g; e.fadeIn = fi; e.fadeOut = fo
+        afterEdit(false)
+    }
+
+    /** 波形上拖淡入淡出方块时调用（开始拖时已经 pushUndo） */
+    fun fadeDragged() { current?.touch(); wave.invalidate() }
+
+    /** 输入框改选区；返回错误提示，null = 成功 */
+    fun applySel(a0: Double, b0: Double): String? {
+        if (!ready) return null
+        var a = a0
+        var b = b0
+        if (a < 0 && b < 0) { wave.clearSelection(); return null }
+        if (a < 0) a = 0.0
+        if (b < 0 || b > wave.duration) b = wave.duration
+        if (b <= a) return "结束时间必须大于开始时间"
+        wave.setSelection(a, b)
+        wave.follow(a)
+        return null
+    }
+
+    fun selectAll() { if (ready) wave.setSelection(0.0, wave.duration) }
+
+    private fun currentPos(): Double {
+        if (player.playing) { val p = player.position; if (p >= 0) return p }
+        return wave.playhead
+    }
+
+    /** 标入点：选区开始 = 播放头 */
+    fun markIn() {
+        if (!ready) return
+        val p = currentPos()
+        wave.setSelection(p, if (wave.hasSel && wave.selEnd > p + 0.01) wave.selEnd else wave.duration)
+    }
+
+    /** 标出点：选区结束 = 播放头 */
+    fun markOut() {
+        if (!ready) return
+        val p = currentPos()
+        wave.setSelection(if (wave.hasSel && wave.selStart < p - 0.01) wave.selStart else 0.0, p)
+    }
+
+    // ================= 试听 =================
+
+    fun togglePlay() {
+        if (player.playing) { pausePlay(); return }
+        if (!ready || tempWav == null) return
+        var from = wave.playhead
+        var to = wave.duration
+        if (wave.hasSel) {
+            if (from < wave.selStart || from >= wave.selEnd - 0.05) from = wave.selStart
+            to = wave.selEnd
+        } else if (from >= wave.duration - 0.05) from = 0.0
+        startPlay(from, to)
+    }
+
+    private fun startPlay(from: Double, to: Double) {
+        val f = tempWav ?: return
+        if (!player.start(f, tempOff, current!!.edit!!, from, to)) { toast("无法播放"); return }
+        playFrom = from
+        wave.playhead = from
+        wave.follow(from)
+        playing = true
+    }
+
+    fun pausePlay() {
+        val pos = player.position
+        player.stop()
+        playing = false
+        if (pos >= 0) wave.playhead = min(pos, wave.duration)
+        wave.invalidate()
+    }
+
+    fun stopPlay() {
+        player.stop()
+        playing = false
+        seek(if (wave.hasSel) wave.selStart else 0.0)
+    }
+
+    fun seek(t: Double) {
+        if (!wave.loaded) return
+        wave.playhead = t.coerceIn(0.0, wave.duration)
+        wave.follow(wave.playhead)
+        onSeek(wave.playhead)
+    }
+
+    /** 波形上点了一下（播放中会从这里接着播） */
+    fun onSeek(t: Double) {
+        wave.invalidate()
+        if (!playing) return
+        startPlay(t, if (wave.hasSel && t >= wave.selStart && t < wave.selEnd) wave.selEnd else wave.duration)
+    }
+
+    /** 播放中每帧调用：移动播放头；播完回到这次播放的起点，方便反复试听 */
+    fun tick() {
+        if (!playing) return
+        if (!player.playing) {
+            playing = false
+            wave.playhead = playFrom
+            wave.follow(playFrom)
+            return
+        }
+        val pos = player.position
+        if (pos >= 0) { wave.playhead = min(pos, wave.duration); wave.follow(wave.playhead) }
+    }
+
+    // ================= 导出 =================
+
+    fun startExport(all: Boolean) {
+        if (exporting) return
+        if (!Ffmpeg.available(app)) { toast("找不到内置的 ffmpeg"); return }
+        val items = if (all) files.toList() else listOfNotNull(current)
+        if (items.isEmpty()) { toast(if (all) "请先添加文件" else "请先选择一个文件"); return }
+        if (playing) pausePlay()
+        val job = Job(
+            fmt = Formats.list[fmtIdx],
+            channels = chIdx,
+            rate = if (rateIdx > 0) Formats.rates[rateIdx] else null,
+            bitrate = if (bitrateIdx > 0) Formats.bitrates[bitrateIdx] else null,
+            items = items.map {
+                ExportItem(it.name, it.baseName, it.ext, it.path, if (it.edited) it.edit!!.clone() else null, it.duration, it.audio)
+            },
+        )
+        saveSettings()
+        pendingJob = job
+        cancelExport = false
+        exporting = true
+        progress = 0f
+        progressText = "准备导出…"
+        ContextCompat.startForegroundService(app, Intent(app, ExportService::class.java))
+    }
+
+    fun stopExport() {
+        cancelExport = true
+        Ffmpeg.kill(exportProc)
+    }
+
+    /** 在导出服务的后台线程里跑；返回给通知用的一句话总结 */
+    fun runBatch(job: Job, onProgress: (Float, String) -> Unit): String {
+        var ok = 0
+        var fail = 0
+        val n = job.items.size
+        val t0 = System.currentTimeMillis()
+        val outDir = File(app.cacheDir, "out").apply { mkdirs() }
+        log("—— 开始导出 $n 个文件 ——")
+        for (i in 0 until n) {
+            if (cancelExport) break
+            val item = job.items[i]
+            log("[${i + 1}/$n] ${item.name}")
+            if (!item.path.exists()) { log("  × 文件不存在"); fail++; continue }
+            val ext = outExt(job, item)
+            val outName = item.baseName + (if (item.edit != null) "_edit" else "") + ext
+            val tmp = File(outDir, "${System.nanoTime()}$ext")
+            val err = runOne(job, item, tmp, i, n) { frac, text ->
+                main.post { progress = frac; progressText = text }
+                onProgress(frac, text)
+            }
+            if (err == null) {
+                try {
+                    val r = saveToMusic(tmp, outName, ext)
+                    ok++
+                    log("  √ ${r.where}/${r.name}")
+                    main.post { results.add(0, r) }
+                } catch (e: Exception) {
+                    fail++
+                    log("  × 保存失败：${e.message ?: e}")
+                }
+            } else {
+                fail++
+                log(if (cancelExport) "  已停止" else "  × 失败：\n$err")
+            }
+            tmp.delete()
+        }
+        val stopped = cancelExport
+        val sec = (System.currentTimeMillis() - t0) / 1000.0
+        log(String.format("完成：成功 %d，失败 %d，用时 %.1f 秒%s", ok, fail, sec, if (stopped) "（已手动停止）" else ""))
+        val text = when {
+            stopped -> "已停止"
+            fail > 0 -> "完成，$fail 个失败"
+            else -> "完成"
+        }
+        main.post {
+            exporting = false
+            if (!stopped) progress = 1f
+            progressText = text
+        }
+        return when {
+            stopped -> "导出已停止，成功 $ok 个"
+            fail > 0 -> "导出完成：成功 $ok 个，失败 $fail 个"
+            else -> "导出完成：$ok 个文件，在「音乐/$OUT_DIR」"
+        }
+    }
+
+    private fun outExt(job: Job, item: ExportItem): String =
+        if (job.fmt.copy) Formats.keepExt(item.ext, item.audio, item.edit != null && !item.edit.isPureTrim)
+        else job.fmt.ext
+
+    /** 导出一个文件，成功返回 null，失败返回 ffmpeg 最后几行输出 */
+    private fun runOne(job: Job, item: ExportItem, output: File, idx: Int, n: Int, onProgress: (Float, String) -> Unit): String? {
+        val e = item.edit
+        val filter = e != null && !e.isPureTrim
+        val a = arrayListOf("-hide_banner", "-nostdin", "-y", "-i", item.path.path)
+        if (filter) {
+            a += listOf("-filter_complex", Ffmpeg.buildFilter(e!!), "-map", "[out]")
+        } else {
+            if (e != null) {
+                if (e.segs[0].a > 0.0005) a += listOf("-ss", Ffmpeg.t(e.segs[0].a))
+                if (e.segs[0].b < item.srcDur - 0.001) a += listOf("-to", Ffmpeg.t(e.segs[0].b))
+            }
+            a += listOf("-vn", "-sn", "-dn")
+        }
+        if (job.fmt.copy) {
+            if (!filter) a += listOf("-c:a", "copy")
+            else log("  已剪辑/加效果，按原格式重新编码")
+        } else {
+            a += listOf("-c:a", job.fmt.codec)
+            job.rate?.let { a += listOf("-ar", it) }
+            if (job.channels > 0) a += listOf("-ac", job.channels.toString())
+            if (job.bitrate != null && !job.fmt.lossless) a += listOf("-b:a", job.bitrate)
+        }
+        a += listOf("-progress", "pipe:1", "-nostats", output.path)
+
+        var duration = -1.0
+        val outLen = e?.length ?: -1.0
+        val tail = ArrayDeque<String>()
+        var lastPct = -1
+        val code = try {
+            Ffmpeg.run(
+                app, a,
+                started = { exportProc = it; if (cancelExport) Ffmpeg.kill(it) },
+                onErr = { line ->
+                    synchronized(tail) { tail.addLast(line); if (tail.size > 10) tail.removeFirst() }
+                    if (duration < 0) Ffmpeg.parseDuration(line)?.let { duration = it }
+                },
+                onTime = { t ->
+                    val total = if (outLen > 0) outLen else duration
+                    if (total > 0) {
+                        val frac = min(1.0, t / total)
+                        val pct = (frac * 100).roundToInt()
+                        if (pct != lastPct) {
+                            lastPct = pct
+                            onProgress(((idx + frac) / n).toFloat(), "${idx + 1}/$n  $pct%")
+                        }
+                    }
+                },
+            )
+        } catch (ex: Exception) {
+            exportProc = null
+            return "  无法启动 ffmpeg：${ex.message}"
+        }
+        exportProc = null
+        if (code == 0 && !cancelExport && output.length() > 0) return null
+        return synchronized(tail) { "  " + tail.joinToString("\n  ") }
+    }
+
+    /** 存进公共「音乐/K剪音」目录（Android 10+ 不需要存储权限）；系统不收的类型改存「下载/K剪音」 */
+    private fun saveToMusic(src: File, name: String, ext: String): ExportResult {
+        val sysMime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext.removePrefix("."))
+        val mime = if (sysMime != null && sysMime.startsWith("audio/")) sysMime else Formats.mime(ext)
+        return try {
+            insert(MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY), "Music/$OUT_DIR", src, name, mime, "音乐/$OUT_DIR")
+        } catch (_: Exception) {
+            insert(MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY), "Download/$OUT_DIR", src, name, mime, "下载/$OUT_DIR")
+        }
+    }
+
+    private fun insert(collection: Uri, relPath: String, src: File, name: String, mime: String, where: String): ExportResult {
+        val cr = app.contentResolver
+        val v = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, name)
+            put(MediaStore.MediaColumns.MIME_TYPE, mime)
+            put(MediaStore.MediaColumns.RELATIVE_PATH, relPath)
+            put(MediaStore.MediaColumns.IS_PENDING, 1)
+        }
+        val uri = cr.insert(collection, v) ?: throw IllegalStateException("系统拒绝创建文件")
+        try {
+            cr.openOutputStream(uri)?.use { o -> src.inputStream().use { it.copyTo(o, 1 shl 16) } }
+                ?: throw IllegalStateException("无法写入")
+            cr.update(uri, ContentValues().apply { put(MediaStore.MediaColumns.IS_PENDING, 0) }, null, null)
+        } catch (e: Exception) {
+            try { cr.delete(uri, null, null) } catch (_: Exception) { }
+            throw e
+        }
+        // 系统重名时会自动改名（如「xx (1).mp3」），读回实际名字
+        var finalName = name
+        try {
+            cr.query(uri, arrayOf(MediaStore.MediaColumns.DISPLAY_NAME), null, null, null)?.use { c ->
+                if (c.moveToFirst()) finalName = c.getString(0) ?: name
+            }
+        } catch (_: Exception) { }
+        return ExportResult(finalName, uri, mime, where)
+    }
+
+    /** App 退到后台时停掉试听 */
+    fun onBackground() { if (playing) pausePlay() }
+}
