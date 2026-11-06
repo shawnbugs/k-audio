@@ -52,7 +52,7 @@ object Formats {
         return if (reencode && byCodec !in reencodable) ".flac" else byCodec
     }
 
-    /** 存进 MediaStore 用的 MIME（必须是 audio/*，系统才让放进「音乐」） */
+    // 存进 MediaStore 用的 MIME（必须是 audio 开头，系统才让放进「音乐」）。注意注释里别写「斜杠星号」，Kotlin 会当成嵌套注释
     fun mime(ext: String): String = when (ext.lowercase()) {
         ".mp3" -> "audio/mpeg"
         ".wav" -> "audio/x-wav"
