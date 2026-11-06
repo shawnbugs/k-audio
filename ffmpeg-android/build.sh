@@ -84,7 +84,12 @@ fetch "https://downloads.xiph.org/releases/opus/opus-$OPUS_VER.tar.gz" "opus-$OP
 autotools_build "opus-$OPUS_VER" --disable-doc --disable-extra-programs
 
 echo "==== ffmpeg $FFMPEG_VER"
-fetch "https://ffmpeg.org/releases/ffmpeg-$FFMPEG_VER.tar.xz" "ffmpeg-$FFMPEG_VER"
+# ffmpeg.org 在 CI 上偶尔被重置连接，退到 GitHub 官方镜像的同版本标签
+if ! fetch "https://ffmpeg.org/releases/ffmpeg-$FFMPEG_VER.tar.xz" "ffmpeg-$FFMPEG_VER"; then
+    curl -fL --retry 4 --retry-delay 5 -o "$SRC/ffmpeg-gh.tar.gz" "https://github.com/FFmpeg/FFmpeg/archive/refs/tags/n$FFMPEG_VER.tar.gz"
+    tar -xf "$SRC/ffmpeg-gh.tar.gz" -C "$SRC"
+    mv "$SRC/FFmpeg-n$FFMPEG_VER" "$SRC/ffmpeg-$FFMPEG_VER"
+fi
 (
     cd "$SRC/ffmpeg-$FFMPEG_VER"
     # 编码器只留导出要用的：格式下拉框 7 种 +「保持原格式」重编码时各容器的默认编码器
