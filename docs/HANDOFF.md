@@ -12,7 +12,7 @@
 | 包名 | `com.shawnbugs.kaudio` |
 | 来源 | PC 版 `D:\AiWork\AudioTool`（C# WinForms，`src\*.cs`），逻辑对照着它移植 |
 | APK | 下载到 `apk\`（已 gitignore） |
-| 用户手机 | 小米 HyperOS 1.0；adb 在 `D:\Program Files\SoftWare\scrcpy-win64-v3.3.4\adb.exe`，**只用来只读排查** |
+| 用户手机 | 小米 HyperOS 1.0（M2012K11C）；adb 在 `D:\Program Files\SoftWare\scrcpy-win64-v3.3.4\adb.exe`，平时只读排查，用户要求时可装 APK |
 | 兄弟项目 | k-todo、k-call、k-practice…都在 `D:\AiWork\Android\`，构建流程一样 |
 
 发版：改代码 → `versionCode` +1、`versionName` 改 → README 功能表标版本号 → `git commit`（`K剪音 0.x.y：改了什么`）→ push →
@@ -21,7 +21,7 @@
 ## 2. 和用户打交道的规矩
 
 - 用中文回复；代码注释、提交信息也用中文。
-- 只发正式版（assembleRelease），用户自己装，别 adb install。
+- 只发正式版（assembleRelease）。默认用户自己装；用户说了「手机连着，直接装」时才 adb install -r（2026-11-06 0.1.0 就是这样装的）。
 - 作者署名「司徒王允」（`ui/App.kt` 的 `AUTHOR`，「关于」弹框）。
 - 图标 / 配色照 K功课的暖色（用户认可的系列风格）：暖白底、金→琥珀、赭红。
 
