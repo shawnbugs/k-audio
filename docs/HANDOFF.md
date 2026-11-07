@@ -45,7 +45,9 @@
 - **当前进度（2026-11-07）**：用户要求把 PC 版 v4 的视频剪辑移植过来（PC 版交接在 `D:\AiWork\AudioTool\HANDOFF.md`）。
   用户定的范围：视频导出 H.264 + H.265 + 无损快剪三种都做，画面预览照 PC 版（播放头一帧、拖边线看边线帧、逐帧、全屏）。
   **0.3.0 代码已推送**（`7c1fca6` ffmpeg 加 x264/x265/bmp，下一个提交是 App 代码），但 GitHub Actions 从这次起报
-  「recent account payments have failed or your spending limit needs to be increased」，任务根本没启动（startup_failure）——
+  「recent account payments have failed or your spending limit needs to be increased」，任务根本没启动（startup_failure）。
+  查下来不是额度（11 月只用 0.34/12 美元），是账号的账单信息被 GitHub 按贸易管制判为不合格，私有仓库 Actions 被锁，
+  要用户申诉、或把仓库改公开、或换地方编译——
   **代码还没编译过，ffmpeg 新脚本也没跑过**。用户处理好账单后：`gh workflow run android.yml -R shawnbugs/k-audio --ref main`，
   看 ffmpeg job 能否过（x265 的 NEON 汇编编不过会自动退纯 C，日志里有「!!!!」提示），再修 Kotlin 编译错误。
   验证重点：取画面速度（每帧起一次 ffmpeg）、H.265 在手机上的导出速度、无声视频、导出到 Movies/K剪音 相册能否看到。
