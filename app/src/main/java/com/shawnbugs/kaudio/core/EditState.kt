@@ -58,6 +58,20 @@ class EditState() {
         return null
     }
 
+    /** 时间线位置 t 对应源文件里的时间（用于取视频画面）；到结尾时退回一点，保证还能取到帧（同 PC 版 SourceAt） */
+    fun sourceAt(t: Double): Double {
+        var start = 0.0
+        for (i in segs.indices) {
+            val s = segs[i]
+            if (t < start + s.len || i == segs.size - 1) {
+                val src = s.a + max(0.0, t - start)
+                return max(s.a, min(src, s.b - 0.05))
+            }
+            start += s.len
+        }
+        return 0.0
+    }
+
     fun splitAt(t: Double): Boolean {
         var start = 0.0
         for (i in segs.indices) {

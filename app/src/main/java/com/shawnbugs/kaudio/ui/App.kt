@@ -8,6 +8,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -53,6 +54,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontFamily
@@ -62,6 +64,8 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import com.shawnbugs.kaudio.BuildConfig
 import com.shawnbugs.kaudio.ExportResult
@@ -130,6 +134,7 @@ fun App() {
         ExportBar(export)
     }
 
+    if (Studio.bigPreview && Studio.current?.video != null) BigPreview()
     input?.let { spec -> InputDialog(spec) { input = null } }
     removing?.let { item ->
         AlertDialog(
@@ -152,9 +157,9 @@ fun App() {
             text = {
                 Text(
                     "作者：$AUTHOR\n\n" +
-                        "由 PC 版「音频转换剪辑工具」改编：剪掉不要的部分、调音量、加淡入淡出，再转成想要的格式。\n\n" +
-                        "导出的文件在手机存储的 Music/K剪音 目录（音乐 App 里也能看到）。\n\n" +
-                        "内置 FFmpeg 7.1（LGPL），带 LAME / Vorbis / Opus 编码器。不联网。",
+                        "由 PC 版「音视频转换剪辑工具」改编：剪掉不要的部分、调音量、加淡入淡出，再转成想要的格式；视频可以剪完导出成视频，也可以只提取声音。\n\n" +
+                        "导出的音频在手机存储的 Music/K剪音 目录（音乐 App 里也能看到），视频在 Movies/K剪音（相册里能看到）。\n\n" +
+                        "内置 FFmpeg 7.1（GPL），带 x264 / x265 / LAME / Vorbis / Opus 编码器。不联网。",
                     fontSize = 14.sp,
                 )
             },
@@ -168,7 +173,7 @@ private fun TopBar(onAbout: () -> Unit) {
     Row(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, top = 8.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text("K剪音", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = A.Text1)
-            Text("剪掉不要的部分 · 加淡入淡出 · 转格式", fontSize = 12.sp, color = A.Text2)
+            Text("剪音频 / 视频 · 加淡入淡出 · 转格式", fontSize = 12.sp, color = A.Text2)
         }
         TextButton(onClick = onAbout) { Text("关于", color = A.Text2) }
     }
@@ -206,7 +211,7 @@ private fun FileChip(item: FileItem, onRemove: (FileItem) -> Unit) {
         sub = "已编辑 · " + fmtTime(e.length) + (if (e.segs.size > 1) " · ${e.segs.size}段" else "") + (if (e.hasFx) " · 效果" else "")
         subColor = A.Brand
     } else {
-        sub = if (item.duration > 0) "时长 " + fmtTime(item.duration) else " "
+        sub = (if (item.video != null) "视频 · " else "") + (if (item.duration > 0) "时长 " + fmtTime(item.duration) else " ")
         subColor = A.Text3
     }
     Row(
@@ -280,9 +285,25 @@ private fun WaveCard() {
             Text(Studio.info, fontSize = 11.sp, color = A.Text3, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         Spacer(Modifier.height(8.dp))
-        WaveCanvas(w, Modifier.fillMaxWidth().height(230.dp).clip(RoundedCornerShape(10.dp)))
+        val video = loaded && Studio.isVideo
+        if (video) {
+            VideoFrame(
+                Modifier.fillMaxWidth().height(200.dp).clip(RoundedCornerShape(10.dp)).clickable { Studio.openBigPreview() },
+                hint = "点画面全屏",
+            )
+            Spacer(Modifier.height(8.dp))
+        }
+        WaveCanvas(w, Modifier.fillMaxWidth().height(if (video) 190.dp else 230.dp).clip(RoundedCornerShape(10.dp)))
         Spacer(Modifier.height(10.dp))
         val tight = PaddingValues(horizontal = 4.dp)
+        if (video) {
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                Pill("◀ 上一帧", Modifier.weight(1f), enabled = !Studio.playing, padding = tight) { Studio.stepFrame(-1) }
+                Pill("下一帧 ▶", Modifier.weight(1f), enabled = !Studio.playing, padding = tight) { Studio.stepFrame(1) }
+                Pill("全屏画面", Modifier.weight(1f), padding = tight) { Studio.openBigPreview() }
+            }
+            Spacer(Modifier.height(6.dp))
+        }
         Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             Pill(if (Studio.playing) "暂停" else "播放", Modifier.weight(1.4f), primary = true, enabled = loaded, padding = tight) { Studio.togglePlay() }
             Pill("停止", Modifier.weight(1f), enabled = loaded, padding = tight) { Studio.stopPlay() }
@@ -299,9 +320,64 @@ private fun WaveCard() {
         }
         Spacer(Modifier.height(6.dp))
         Text(
-            "拖动框选 · 拖底部圆柄调选区 · 双指缩放 · 点按定位 · 双击选中一段 · 拖左右上角小方块调淡入淡出",
+            "拖动框选 · 拖底部圆柄调选区 · 双指缩放 · 点按定位 · 双击选中一段 · 拖左右上角小方块调淡入淡出" +
+                if (video) "\n画面显示播放头处的一帧；拖选区边线时显示边线处的画面，方便对准剪辑点" else "",
             fontSize = 11.sp, color = A.Text3,
         )
+    }
+}
+
+/** 视频画面：播放头处的一帧（播放时像幻灯片一样刷新） */
+@Composable
+private fun VideoFrame(modifier: Modifier, hint: String?) {
+    val f = Studio.frame
+    Box(modifier.background(Color.Black), contentAlignment = Alignment.Center) {
+        if (f != null) Image(f, contentDescription = "视频画面", modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Fit)
+        else Text("正在取画面…", fontSize = 12.sp, color = A.Text3)
+        if (hint != null) {
+            Text(
+                hint,
+                Modifier.align(Alignment.TopEnd).padding(6.dp).clip(RoundedCornerShape(6.dp))
+                    .background(Color(0x99000000)).padding(horizontal = 6.dp, vertical = 2.dp),
+                fontSize = 11.sp, color = Color(0xCCFFFFFF),
+            )
+        }
+    }
+}
+
+/** 全屏看画面（同 PC 版的大窗预览）：逐帧、播放、加剪辑点都能在这里做 */
+@Composable
+private fun BigPreview() {
+    val w = Studio.wave
+    @Suppress("UNUSED_VARIABLE") val r = w.rev
+    Dialog(
+        onDismissRequest = { Studio.closeBigPreview() },
+        properties = DialogProperties(usePlatformDefaultWidth = false, decorFitsSystemWindows = false),
+    ) {
+        Column(Modifier.fillMaxSize().background(Color.Black).systemBarsPadding()) {
+            VideoFrame(Modifier.fillMaxWidth().weight(1f), hint = null)
+            Column(Modifier.fillMaxWidth().background(A.Card).padding(12.dp)) {
+                Text(
+                    "${fmtTime(w.playhead)} / ${fmtTime(w.duration)}" + if (w.hasSel) "    选区 ${fmtTime(w.selStart)} – ${fmtTime(w.selEnd)}" else "",
+                    fontSize = 13.sp, color = A.Text1, style = A.Num,
+                )
+                Spacer(Modifier.height(8.dp))
+                val tight = PaddingValues(horizontal = 4.dp)
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Pill("◀ 上一帧", Modifier.weight(1f), enabled = !Studio.playing, padding = tight) { Studio.stepFrame(-1) }
+                    Pill(if (Studio.playing) "暂停" else "播放", Modifier.weight(1f), primary = true, padding = tight) { Studio.togglePlay() }
+                    Pill("下一帧 ▶", Modifier.weight(1f), enabled = !Studio.playing, padding = tight) { Studio.stepFrame(1) }
+                }
+                Spacer(Modifier.height(6.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Pill("播放头→开始", Modifier.weight(1f), padding = tight) { Studio.markIn() }
+                    Pill("播放头→结束", Modifier.weight(1f), padding = tight) { Studio.markOut() }
+                    Pill("剪辑点", Modifier.weight(1f), padding = tight) { Studio.split() }
+                }
+                Spacer(Modifier.height(6.dp))
+                Pill("关闭全屏", Modifier.fillMaxWidth(), padding = tight) { Studio.closeBigPreview() }
+            }
+        }
     }
 }
 
@@ -440,19 +516,33 @@ private fun ParamCard() {
     Column(Modifier.card().padding(12.dp)) {
         SectionTitle("导出格式")
         Spacer(Modifier.height(8.dp))
+        // 视频格式时换成「分辨率 / 画质 / 声音」一组，位置相同（同 PC 版）
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Dropdown("格式", Formats.list.map { it.name }, Studio.fmtIdx, Modifier.weight(1f), !busy) { Studio.fmtIdx = it; Studio.saveSettings() }
-            Dropdown("采样率 (Hz)", Formats.rates, Studio.rateIdx, Modifier.weight(1f), !busy && !fmt.copy) { Studio.rateIdx = it; Studio.saveSettings() }
+            if (fmt.video) Dropdown("分辨率", Formats.resolutions, Studio.resIdx, Modifier.weight(1f), !busy && !fmt.copy) { Studio.resIdx = it; Studio.saveSettings() }
+            else Dropdown("采样率 (Hz)", Formats.rates, Studio.rateIdx, Modifier.weight(1f), !busy && !fmt.copy) { Studio.rateIdx = it; Studio.saveSettings() }
         }
         Spacer(Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-            Dropdown("比特率", Formats.bitrates, Studio.bitrateIdx, Modifier.weight(1f), !busy && !fmt.copy && !fmt.lossless) { Studio.bitrateIdx = it; Studio.saveSettings() }
-            Dropdown("声道", Formats.channels, Studio.chIdx, Modifier.weight(1f), !busy && !fmt.copy) { Studio.chIdx = it; Studio.saveSettings() }
+            if (fmt.video) {
+                Dropdown("画质", Formats.qualities, Studio.qualityIdx, Modifier.weight(1f), !busy && !fmt.copy) { Studio.qualityIdx = it; Studio.saveSettings() }
+                Dropdown("声音", Formats.videoAudio, Studio.vAudioIdx, Modifier.weight(1f), !busy) { Studio.vAudioIdx = it; Studio.saveSettings() }
+            } else {
+                Dropdown("比特率", Formats.bitrates, Studio.bitrateIdx, Modifier.weight(1f), !busy && !fmt.copy && !fmt.lossless) { Studio.bitrateIdx = it; Studio.saveSettings() }
+                Dropdown("声道", Formats.channels, Studio.chIdx, Modifier.weight(1f), !busy && !fmt.copy) { Studio.chIdx = it; Studio.saveSettings() }
+            }
         }
         Spacer(Modifier.height(8.dp))
+        val tip = when {
+            fmt.video && fmt.copy -> "\n无损快剪：不重新编码，几秒完成、画质不变；但开头会对齐到最近的关键帧（可能早零点几秒到几秒）。" +
+                "删了中间部分或加了效果时会自动改成高画质 H.264 重新编码"
+            fmt.codec == "libx265" -> "\nH.265：同样画质文件约小一半，但用手机 CPU 编码比 H.264 慢好几倍；老手机 / 老电脑可能播不了。分辨率只缩小不放大"
+            fmt.video -> "\nH.264：兼容性最好，哪里都能播；用手机 CPU 编码，长视频要等一会儿。分辨率只缩小不放大（竖屏按短边算）"
+            fmt.copy -> "\n保持原格式：只截一段时不重新编码（无损、很快）；视频文件会直接提取原音轨（如 aac → m4a）"
+            else -> "\n视频文件也能选音频格式，直接把声音提取出来"
+        }
         Text(
-            "保存到手机存储的 Music/${Studio.OUT_DIR}" +
-                if (fmt.copy) "\n保持原格式：只截一段时不重新编码（无损、很快）；视频文件会直接提取原音轨（如 aac → m4a）" else "",
+            "保存到手机存储的 " + (if (fmt.video) "Movies" else "Music") + "/${Studio.OUT_DIR}" + tip,
             fontSize = 11.sp, color = A.Text3,
         )
     }

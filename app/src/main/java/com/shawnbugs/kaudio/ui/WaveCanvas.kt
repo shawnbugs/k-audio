@@ -193,9 +193,10 @@ private suspend fun PointerInputScope.gestures(w: WaveModel, gs: GestureUi) {
                     moved = true
                     w.selStart = min(anchor, t); w.selEnd = max(anchor, t)
                     w.invalidate()
+                    Studio.selChanged()
                 }
-                Mode.Left -> { moved = true; w.selStart = min(t, w.selEnd - 0.01); w.invalidate() }
-                Mode.Right -> { moved = true; w.selEnd = max(t, w.selStart + 0.01); w.invalidate() }
+                Mode.Left -> { moved = true; w.selStart = min(t, w.selEnd - 0.01); w.invalidate(); Studio.selChanged() }
+                Mode.Right -> { moved = true; w.selEnd = max(t, w.selStart + 0.01); w.invalidate(); Studio.selChanged() }
                 Mode.None -> {}
             }
             ch.consume()

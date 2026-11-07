@@ -3,6 +3,7 @@ package com.shawnbugs.kaudio
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
@@ -16,6 +17,8 @@ import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.core.content.ContextCompat
 import com.shawnbugs.kaudio.core.EditState
 import com.shawnbugs.kaudio.core.Ffmpeg
@@ -26,6 +29,7 @@ import com.shawnbugs.kaudio.core.PcmPlayer
 import com.shawnbugs.kaudio.core.Peaks
 import com.shawnbugs.kaudio.core.fmtTime
 import com.shawnbugs.kaudio.core.readPeaks
+import com.shawnbugs.kaudio.core.writeSilentWav
 import java.io.File
 import java.util.concurrent.Executors
 import kotlin.concurrent.thread
@@ -34,8 +38,11 @@ import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.roundToInt
 
-/** 列表里的一个文件。path 是复制到 App 缓存里的副本（ffmpeg 只认真实路径） */
-class FileItem(val id: Long, val name: String, val size: Long, val path: File, val audio: String?) {
+/**
+ * 列表里的一个文件。path 是复制到 App 缓存里的副本（ffmpeg 只认真实路径）。
+ * audio / video 是 ffmpeg 报的音轨 / 视频流描述，没有就是 null（两个不会同时为 null）。
+ */
+class FileItem(val id: Long, val name: String, val size: Long, val path: File, val audio: String?, val video: String?) {
     var duration = -1.0                 // 导入时探测，打开波形后换成解码出的精确值
     var edit: EditState? = null         // 各自的编辑结果，没打开过为 null（导出整段）
     val undo = ArrayList<EditState>()
@@ -49,9 +56,17 @@ class FileItem(val id: Long, val name: String, val size: Long, val path: File, v
     val baseName: String get() = name.substringBeforeLast('.').ifEmpty { name }
 }
 
-class ExportItem(val name: String, val baseName: String, val ext: String, val path: File, val edit: EditState?, val srcDur: Double, val audio: String?)
+class ExportItem(
+    val name: String, val baseName: String, val ext: String, val path: File, val edit: EditState?, val srcDur: Double,
+    val audio: String?, val video: String?,
+)
 
-class Job(val fmt: FormatInfo, val channels: Int, val rate: String?, val bitrate: String?, val items: List<ExportItem>)
+/** height / quality / keepAudio 只对视频格式有用（同 PC 版） */
+class Job(
+    val fmt: FormatInfo, val channels: Int, val rate: String?, val bitrate: String?,
+    val height: Int, val quality: Int, val keepAudio: Boolean,
+    val items: List<ExportItem>,
+)
 
 class ExportResult(val name: String, val uri: Uri, val mime: String, val where: String)
 
@@ -94,6 +109,24 @@ object Studio {
     var rateIdx by mutableIntStateOf(0)
     var bitrateIdx by mutableIntStateOf(0)
     var chIdx by mutableIntStateOf(0)
+    var resIdx by mutableIntStateOf(0)
+    var qualityIdx by mutableIntStateOf(1)
+    var vAudioIdx by mutableIntStateOf(0)
+
+    // 视频画面（同 PC 版：播放头处取一帧；只保留最新一次请求，播放时自然成了「幻灯片」）
+    var frame by mutableStateOf<ImageBitmap?>(null)
+        private set
+    var bigPreview by mutableStateOf(false)
+        private set
+    private val frameLock = Object()
+    private var framePath: String? = null
+    private var frameSrc = -1.0
+    private var frameW = 0
+    private var frameBusy = false
+    private var frameShown: String? = null   // 已显示/正在取的画面（路径|源时间|宽度），相同请求不重复取
+    @Volatile private var frameProc: Process? = null
+    private var lastSelA = -1.0
+    private var lastSelB = -1.0
 
     // 导出
     var exporting by mutableStateOf(false)
@@ -116,10 +149,13 @@ object Studio {
         File(app.cacheDir, "out").deleteRecursively()
         app.cacheDir.listFiles { f -> f.name.startsWith("preview_") }?.forEach { it.delete() }
         val sp = prefs()
-        fmtIdx = Formats.list.indexOfFirst { it.name == sp.getString("format", null) }.coerceAtLeast(0)
+        fmtIdx = Formats.indexOf(sp.getString("format", null))
         rateIdx = Formats.rates.indexOf(sp.getString("rate", null)).coerceAtLeast(0)
         bitrateIdx = Formats.bitrates.indexOf(sp.getString("bitrate", null)).coerceAtLeast(0)
         chIdx = Formats.channels.indexOf(sp.getString("channels", null)).coerceAtLeast(0)
+        resIdx = Formats.resolutions.indexOf(sp.getString("resolution", null)).coerceAtLeast(0)
+        qualityIdx = Formats.qualities.indexOf(sp.getString("quality", "标准")).coerceAtLeast(0)
+        vAudioIdx = Formats.videoAudio.indexOf(sp.getString("videoaudio", null)).coerceAtLeast(0)
         if (!Ffmpeg.available(app)) log("找不到内置的 ffmpeg，安装包可能不完整")
     }
 
@@ -131,6 +167,9 @@ object Studio {
             .putString("rate", Formats.rates[rateIdx])
             .putString("bitrate", Formats.bitrates[bitrateIdx])
             .putString("channels", Formats.channels[chIdx])
+            .putString("resolution", Formats.resolutions[resIdx])
+            .putString("quality", Formats.qualities[qualityIdx])
+            .putString("videoaudio", Formats.videoAudio[vAudioIdx])
             .apply()
     }
 
@@ -166,13 +205,13 @@ object Studio {
                     val ins = app.contentResolver.openInputStream(u) ?: throw IllegalStateException("打不开")
                     ins.use { i -> f.outputStream().use { o -> i.copyTo(o, 1 shl 16) } }
                     val probe = Ffmpeg.probe(app, f.path)
-                    if (probe.audio == null) {
+                    if (probe.audio == null && probe.video == null) {
                         dir.deleteRecursively()
-                        log("× $name：没有找到音轨")
-                        toast("「$name」里没有声音")
+                        log("× $name：没有找到音轨和视频画面")
+                        toast("「$name」不是音频或视频文件")
                         continue
                     }
-                    val item = FileItem(id, name, f.length(), f, probe.audio).apply { duration = probe.duration }
+                    val item = FileItem(id, name, f.length(), f, probe.audio, probe.video).apply { duration = probe.duration }
                     main.post {
                         files.add(item)
                         if (current == null) select(item)
@@ -237,6 +276,7 @@ object Studio {
         Ffmpeg.kill(p)
         tempWav?.delete()
         tempWav = null
+        clearFrame()
         if (!resetUi) return
         current = null
         info = ""
@@ -258,9 +298,16 @@ object Studio {
             "-vn", "-sn", "-dn", "-ac", "2", "-ar", "$PREVIEW_RATE", "-c:a", "pcm_s16le", "-map_metadata", "-1",
             "-progress", "pipe:1", "-nostats", tmp.path,
         )
+        // 没有声音的视频：生成一段等长的静音当「波形」，照样可以剪（同 PC 版）
+        val silent = item.audio == null
         thread(isDaemon = true) {
             var last = ""
-            val code = try {
+            val code = if (silent) {
+                try {
+                    if (item.duration <= 0) throw IllegalStateException("读不出这个视频的时长")
+                    writeSilentWav(tmp, item.duration); 0
+                } catch (e: Exception) { last = e.message ?: e.toString(); -1 }
+            } else try {
                 Ffmpeg.run(
                     app, args,
                     started = { p -> decodeProc = p; if (seq != loadSeq) Ffmpeg.kill(p) },
@@ -277,7 +324,14 @@ object Studio {
 
             var peaks: Peaks? = null
             if (code == 0 && seq == loadSeq) {
-                try { peaks = readPeaks(tmp, PREVIEW_RATE / 100) { seq != loadSeq } } catch (e: Exception) { last = e.message ?: e.toString() }
+                try {
+                    peaks = if (silent) {
+                        // 全是零，不用真去读几百 MB
+                        val frames = (tmp.length() - 44) / 4
+                        val nb = ((frames + PREVIEW_RATE / 100 - 1) / (PREVIEW_RATE / 100)).toInt()
+                        Peaks(FloatArray(nb), FloatArray(nb), 0.01, frames, 44)
+                    } else readPeaks(tmp, PREVIEW_RATE / 100) { seq != loadSeq }
+                } catch (e: Exception) { last = e.message ?: e.toString() }
             }
             main.post {
                 if (seq != loadSeq) { tmp.delete(); return@post }
@@ -293,8 +347,13 @@ object Studio {
                 item.duration = p.frames / PREVIEW_RATE.toDouble()
                 if (item.edit == null) item.edit = EditState(item.duration)
                 wave.setData(p, item.edit!!)
-                info = "原始时长 ${fmtTime(item.duration)}" + (item.audio?.let { "  ·  $it" } ?: "")
+                lastSelA = -1.0; lastSelB = -1.0
+                val desc = if (item.video != null)
+                    Ffmpeg.videoSummary(item.video) + "  ·  " + (item.audio?.let { "音频 $it" } ?: "（没有声音）")
+                else item.audio
+                info = "原始时长 ${fmtTime(item.duration)}" + (desc?.let { "  ·  $it" } ?: "")
                 item.touch()
+                requestFrame(0.0)
             }
         }
     }
@@ -318,6 +377,7 @@ object Studio {
         if (structural && playing) pausePlay()
         wave.setEdit(c.edit!!)
         c.touch()
+        if (structural) refreshFrame()
     }
 
     /** 在播放头处加剪辑点；有选区时在选区两端各加一个 */
@@ -485,7 +545,7 @@ object Studio {
     /** 波形上点了一下（播放中会从这里接着播） */
     fun onSeek(t: Double) {
         wave.invalidate()
-        if (!playing) return
+        if (!playing) { requestFrame(t); return }
         startPlay(t, if (wave.hasSel && t >= wave.selStart && t < wave.selEnd) wave.selEnd else wave.duration)
     }
 
@@ -496,10 +556,91 @@ object Studio {
             playing = false
             wave.playhead = playFrom
             wave.follow(playFrom)
+            requestFrame(playFrom)
             return
         }
         val pos = player.position
-        if (pos >= 0) { wave.playhead = min(pos, wave.duration); wave.follow(wave.playhead) }
+        if (pos >= 0) { wave.playhead = min(pos, wave.duration); wave.follow(wave.playhead); requestFrame(wave.playhead) }
+    }
+
+    // ================= 视频画面 =================
+
+    /** 当前文件是视频且波形已加载 */
+    val isVideo: Boolean get() = current?.video != null && wave.loaded
+
+    private fun frameWidth(): Int =
+        if (bigPreview) app.resources.displayMetrics.widthPixels.coerceIn(720, 1920) else 720
+
+    fun refreshFrame() { requestFrame(currentPos()) }
+
+    /** 取时间线 t 处的画面。后台一个线程循环取，只取最新的请求（同 PC 版 RequestFrame） */
+    fun requestFrame(t: Double) {
+        val c = current ?: return
+        if (c.video == null || !ready || !Ffmpeg.available(app)) return
+        val src = Math.round(c.edit!!.sourceAt(t) * 1000) / 1000.0
+        val width = frameWidth()
+        val path = c.path.path
+        val key = "$path|$src|$width"
+        if (key == frameShown) return
+        frameShown = key
+        synchronized(frameLock) {
+            framePath = path
+            frameSrc = src
+            frameW = width
+            if (frameBusy) return
+            frameBusy = true
+        }
+        thread(isDaemon = true, name = "frame") {
+            while (true) {
+                val req = synchronized(frameLock) {
+                    val fp = framePath
+                    if (frameSrc < 0 || fp == null) { frameBusy = false; null }
+                    else Triple(fp, frameSrc, frameW).also { frameSrc = -1.0 }
+                } ?: break
+                val (p, s, w) = req
+                val bytes = Ffmpeg.grabFrame(app, p, s, w) { frameProc = it }
+                frameProc = null
+                val bmp = bytes?.let { b -> try { BitmapFactory.decodeByteArray(b, 0, b.size) } catch (_: Throwable) { null } }
+                if (bmp != null) main.post { if (current?.path?.path == p) frame = bmp.asImageBitmap() }
+            }
+        }
+    }
+
+    private fun clearFrame() {
+        synchronized(frameLock) { framePath = null; frameSrc = -1.0 }
+        Ffmpeg.kill(frameProc)
+        frame = null
+        frameShown = null
+        bigPreview = false
+    }
+
+    /** 拖选区边缘时显示边缘处的画面，方便对准剪辑点（波形手势里每次改了选区都调） */
+    fun selChanged() {
+        val a = wave.selStart
+        val b = wave.selEnd
+        val aMoved = abs(a - lastSelA) > 1e-6
+        val bMoved = abs(b - lastSelB) > 1e-6
+        lastSelA = a; lastSelB = b
+        if (!wave.hasSel || playing) return
+        if (aMoved) requestFrame(a) else if (bMoved) requestFrame(max(a, b - 0.02))
+    }
+
+    /** 逐帧移动播放头：按视频帧率（读不出时按 25 帧，即 PC 版的 0.04 秒） */
+    fun stepFrame(dir: Int) {
+        if (!ready || playing) return
+        val step = current?.video?.let { Ffmpeg.videoFps(it) }?.let { 1.0 / it } ?: 0.04
+        seek(wave.playhead + dir * step)
+    }
+
+    fun openBigPreview() {
+        if (!isVideo) return
+        bigPreview = true
+        refreshFrame()
+    }
+
+    fun closeBigPreview() {
+        bigPreview = false
+        refreshFrame()   // 换回小尺寸，省点内存
     }
 
     // ================= 导出 =================
@@ -515,8 +656,11 @@ object Studio {
             channels = chIdx,
             rate = if (rateIdx > 0) Formats.rates[rateIdx] else null,
             bitrate = if (bitrateIdx > 0) Formats.bitrates[bitrateIdx] else null,
+            height = Formats.resHeights[resIdx],
+            quality = qualityIdx,
+            keepAudio = vAudioIdx == 0,
             items = items.map {
-                ExportItem(it.name, it.baseName, it.ext, it.path, if (it.edited) it.edit!!.clone() else null, it.duration, it.audio)
+                ExportItem(it.name, it.baseName, it.ext, it.path, if (it.edited) it.edit!!.clone() else null, it.duration, it.audio, it.video)
             },
         )
         saveSettings()
@@ -546,6 +690,8 @@ object Studio {
             val item = job.items[i]
             log("[${i + 1}/$n] ${item.name}")
             if (!item.path.exists()) { log("  × 文件不存在"); fail++; continue }
+            if (job.fmt.video && item.video == null) { log("  × 不是视频文件，跳过（音频文件请选 MP3 等音频格式）"); fail++; continue }
+            if (!job.fmt.video && item.audio == null) { log("  × 这个视频没有声音，无法导出音频"); fail++; continue }
             val ext = outExt(job, item)
             val outName = item.baseName + (if (item.edit != null) "_edit" else "") + ext
             val tmp = File(outDir, "${System.nanoTime()}$ext")
@@ -555,7 +701,7 @@ object Studio {
             }
             if (err == null) {
                 try {
-                    val r = saveToMusic(tmp, outName, ext)
+                    val r = if (job.fmt.video) saveToMovies(tmp, outName, ext) else saveToMusic(tmp, outName, ext)
                     ok++
                     log("  √ ${r.where}/${r.name}")
                     main.post { results.add(0, r) }
@@ -585,21 +731,85 @@ object Studio {
         return when {
             stopped -> "导出已停止，成功 $ok 个"
             fail > 0 -> "导出完成：成功 $ok 个，失败 $fail 个"
-            else -> "导出完成：$ok 个文件，在「音乐/$OUT_DIR」"
+            else -> "导出完成：$ok 个文件，在「" + (if (job.fmt.video) "Movies" else "音乐") + "/$OUT_DIR」"
         }
     }
 
-    private fun outExt(job: Job, item: ExportItem): String =
-        if (job.fmt.copy) Formats.keepExt(item.ext, item.audio, item.edit != null && !item.edit.isPureTrim)
-        else job.fmt.ext
+    private fun outExt(job: Job, item: ExportItem): String = when {
+        job.fmt.video && job.fmt.copy -> {
+            // 无损快剪沿用原容器；不得不重新编码、原容器又装不了 H.264 时改存 MP4（同 PC 版）
+            val ext = item.ext
+            when {
+                ext.isEmpty() -> if (canStreamCopy(job, item)) ".mkv" else ".mp4"
+                !canStreamCopy(job, item) && ext !in Formats.videoContainers -> ".mp4"
+                else -> ext
+            }
+        }
+        job.fmt.copy -> Formats.keepExt(item.ext, item.audio, item.edit != null && !item.edit.isPureTrim)
+        else -> job.fmt.ext
+    }
+
+    /** 视频无损快剪：只截了一段（或没剪）、没加效果，才能不重新编码 */
+    private fun canStreamCopy(job: Job, item: ExportItem): Boolean =
+        job.fmt.video && job.fmt.copy && (item.edit == null || item.edit.isPureTrim)
+
+    /** 视频导出参数（同 PC 版 BuildVideoArgs），不含进度和输出文件 */
+    private fun videoArgs(job: Job, item: ExportItem, output: File): ArrayList<String> {
+        val e = item.edit
+        val audio = job.keepAudio && item.audio != null
+        val mp4 = output.name.endsWith(".mp4", true) || output.name.endsWith(".mov", true)
+        val a = arrayListOf("-hide_banner", "-nostdin", "-y")
+        val trimOnly = e == null || e.isPureTrim
+        if (trimOnly && e != null) {
+            // 输入端定位：快，且重新编码时是精确的
+            if (e.segs[0].a > 0.0005) a += listOf("-ss", Ffmpeg.t(e.segs[0].a))
+            if (e.segs[0].b < item.srcDur - 0.001) a += listOf("-to", Ffmpeg.t(e.segs[0].b))
+        }
+        a += listOf("-i", item.path.path)
+
+        if (canStreamCopy(job, item)) {
+            a += listOf("-map", "0:v:0")
+            if (audio) a += listOf("-map", "0:a?") else a += "-an"
+            a += listOf("-c", "copy", "-avoid_negative_ts", "make_zero")
+            if (mp4) a += listOf("-movflags", "+faststart")
+            return a
+        }
+
+        // 重新编码。无损快剪模式下被迫重编码时：H.264 高画质、原分辨率
+        val copyFallback = job.fmt.copy
+        if (copyFallback) log("  删了中间部分或加了效果，无法无损快剪，改为高画质重新编码")
+        val codec = if (copyFallback) "libx264" else job.fmt.codec
+        val q = if (copyFallback) 0 else job.quality
+        val scale = if (copyFallback) null else Ffmpeg.scaleFilter(job.height)
+        if (trimOnly) {
+            a += listOf("-map", "0:v:0")
+            if (audio) a += listOf("-map", "0:a:0?") else a += "-an"
+            if (scale != null) a += listOf("-vf", scale)
+        } else {
+            a += listOf("-filter_complex", Ffmpeg.buildFilter(e!!, true, audio, scale), "-map", "[vout]")
+            if (audio) a += listOf("-map", "[aout]") else a += "-an"
+        }
+        if (codec == "libx265") {
+            a += listOf("-c:v", "libx265", "-preset", "fast", "-crf", Formats.crfX265[q].toString(), "-x265-params", "log-level=error")
+            if (mp4) a += listOf("-tag:v", "hvc1")   // 苹果设备需要这个标记才能播 H.265
+        } else {
+            a += listOf("-c:v", "libx264", "-preset", "fast", "-crf", Formats.crfX264[q].toString())
+        }
+        a += listOf("-pix_fmt", "yuv420p")
+        if (audio) a += listOf("-c:a", "aac", "-b:a", "192k")
+        if (mp4) a += listOf("-movflags", "+faststart")
+        return a
+    }
 
     /** 导出一个文件，成功返回 null，失败返回 ffmpeg 最后几行输出 */
     private fun runOne(job: Job, item: ExportItem, output: File, idx: Int, n: Int, onProgress: (Float, String) -> Unit): String? {
         val e = item.edit
         val filter = e != null && !e.isPureTrim
-        val a = arrayListOf("-hide_banner", "-nostdin", "-y", "-i", item.path.path)
-        if (filter) {
-            a += listOf("-filter_complex", Ffmpeg.buildFilter(e!!), "-map", "[out]")
+        val a = if (job.fmt.video) videoArgs(job, item, output) else arrayListOf("-hide_banner", "-nostdin", "-y", "-i", item.path.path)
+        if (job.fmt.video) {
+            // 参数已在 videoArgs 里拼好
+        } else if (filter) {
+            a += listOf("-filter_complex", Ffmpeg.buildFilter(e!!, false, true, null), "-map", "[aout]")
         } else {
             if (e != null) {
                 if (e.segs[0].a > 0.0005) a += listOf("-ss", Ffmpeg.t(e.segs[0].a))
@@ -607,7 +817,9 @@ object Studio {
             }
             a += listOf("-vn", "-sn", "-dn")
         }
-        if (job.fmt.copy) {
+        if (job.fmt.video) {
+            // 视频的编码参数也在 videoArgs 里
+        } else if (job.fmt.copy) {
             if (!filter) a += listOf("-c:a", "copy")
             else log("  已剪辑/加效果，按原格式重新编码")
         } else {
@@ -657,6 +869,17 @@ object Studio {
         val mime = if (sysMime != null && sysMime.startsWith("audio/")) sysMime else Formats.mime(ext)
         return try {
             insert(MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY), "Music/$OUT_DIR", src, name, mime, "音乐/$OUT_DIR")
+        } catch (_: Exception) {
+            insert(MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY), "Download/$OUT_DIR", src, name, mime, "下载/$OUT_DIR")
+        }
+    }
+
+    /** 视频存进公共「Movies/K剪音」（相册里能看到）；系统不收的类型改存「下载/K剪音」 */
+    private fun saveToMovies(src: File, name: String, ext: String): ExportResult {
+        val sysMime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext.removePrefix("."))
+        val mime = if (sysMime != null && sysMime.startsWith("video/")) sysMime else Formats.videoMime(ext)
+        return try {
+            insert(MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY), "Movies/$OUT_DIR", src, name, mime, "Movies/$OUT_DIR")
         } catch (_: Exception) {
             insert(MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY), "Download/$OUT_DIR", src, name, mime, "下载/$OUT_DIR")
         }
