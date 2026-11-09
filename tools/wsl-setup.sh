@@ -40,8 +40,28 @@ systemProp.http.proxyHost=$PROXY_HOST
 systemProp.http.proxyPort=$PROXY_PORT
 systemProp.https.proxyHost=$PROXY_HOST
 systemProp.https.proxyPort=$PROXY_PORT
-systemProp.http.nonProxyHosts=localhost|127.0.0.1
+systemProp.http.nonProxyHosts=localhost|127.0.0.1|maven.aliyun.com
 org.gradle.daemon=false
+EOF
+
+# Maven 仓库先走阿里云镜像（直连，不过代理）；原仓库留在后面兜底。
+# 2026-11-09 实测：经代理拉 Google / Maven Central 慢，还时不时握手被断（Remote host terminated the handshake），整次构建失败。
+mkdir -p "$HOME/.gradle/init.d"
+cat > "$HOME/.gradle/init.d/aliyun-mirror.gradle" <<'EOF'
+// 本地 WSL 打包专用（tools/wsl-setup.sh 写入）：settings 里的仓库前面插阿里云镜像，原仓库留作后备
+def mirrors = [
+    'https://maven.aliyun.com/repository/public',
+    'https://maven.aliyun.com/repository/google',
+    'https://maven.aliyun.com/repository/gradle-plugin',
+]
+settingsEvaluated { s ->
+    [s.pluginManagement.repositories, s.dependencyResolutionManagement.repositories].each { repos ->
+        def orig = new ArrayList(repos)
+        repos.clear()
+        mirrors.each { u -> repos.maven { url = u; name = 'aliyun-' + u.tokenize('/').last() } }
+        orig.each { repos.add(it) }
+    }
+}
 EOF
 
 echo "OK：SDK 在 $SDK，NDK = $(ls -d "$SDK"/ndk/* | tail -n1)"

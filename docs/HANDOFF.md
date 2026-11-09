@@ -1,6 +1,6 @@
 # K剪音 交接文档
 
-> 写于 2026-11-06，2026-11-07 更新；版本 **0.3.0**（versionCode 3，代码已推送，CI 因 GitHub 账单问题还没编出来）。**新会话先读本文，再读 [README](../README.md)**。
+> 写于 2026-11-06，2026-11-09 更新；版本 **0.3.0**（versionCode 3；GitHub Actions 因账号被锁跑不了，2026-11-09 在本地 WSL 编出 `apk\KAudio-0.3.0.apk`，还没上真机）。**新会话先读本文，再读 [README](../README.md)**。
 > README 讲「功能现状、关键实现、构建」，本文讲「怎么接手、用户要什么、为什么这么做、还有什么没做」，两份不重复。
 
 ## 1. 一分钟上手
@@ -8,7 +8,7 @@
 | 项 | 值 |
 |---|---|
 | 代码 | `D:\AiWork\Android\k-audio-app`，分支 `main` |
-| 仓库 | https://github.com/shawnbugs/k-audio （Private） |
+| 仓库 | https://github.com/shawnbugs/k-audio （2026-11-09 起公开，别提交敏感信息） |
 | 包名 | `com.shawnbugs.kaudio` |
 | 来源 | PC 版 `D:\AiWork\AudioTool`（C# WinForms，`src\*.cs`），逻辑对照着它移植 |
 | APK | 下载到 `apk\`（已 gitignore） |
@@ -52,19 +52,24 @@
   改不了，别再让用户试。11-09 用户把仓库改成公开试过，**公开仓库也跑不了**（job 注释「your account is locked due to a billing issue」），
   建议改回私有（但官方说受限账号公开后可能改不回私有）。被锁根源大概率是：用户以前让别人代办 GitHub 学生认证（为免费 Copilot），
   学校填了北京大学（美国实体清单）；已建议用户在工单里照实补充说明、请客服去掉这个学校关联，**别改填别的假学校**。
-  **2026-11-09 起本地 WSL 打包**（见下面「本地打包」）。出路：等工单，或本地 WSL 编译（Ubuntu 24.04 已装，评估见会话）——
-  **代码还没编译过，ffmpeg 新脚本也没跑过**。用户处理好账单后：`gh workflow run android.yml -R shawnbugs/k-audio --ref main`，
-  看 ffmpeg job 能否过（x265 的 NEON 汇编编不过会自动退纯 C，日志里有「!!!!」提示），再修 Kotlin 编译错误。
-  验证重点：取画面速度（每帧起一次 ffmpeg）、H.265 在手机上的导出速度、无声视频、导出到 Movies/K剪音 相册能否看到。
+  **2026-11-09 起本地 WSL 打包**（见下面「本地打包」），**0.3.0 已在本地编出来**：ffmpeg（含 x264/x265，x265 的 NEON 汇编编过了、
+  没退纯 C；NEEDED 只有 libm/libz/libdl/libc）+ Kotlin 一次编过（只有 4 个警告，没改源码）。APK 约 34.7 MB（`libffmpeg.so` 23.6 MB），
+  签名与 0.2.0 相同，可 `adb install -r` 覆盖。GitHub 解锁后：`gh workflow run android.yml -R shawnbugs/k-audio --ref main` 确认 CI 也能过。
+  **全部视频功能都还没在真机上验证**。验证重点：取画面速度（每帧起一次 ffmpeg）、逐帧 / 全屏、H.264 / H.265 / 无损快剪导出
+  （H.265 在手机上的速度）、无声视频、导出到 Movies/K剪音 相册能否看到；以及 0.2.0 起没验证的音频功能（见下）。
 - **本地打包（2026-11-09 搭，GitHub 解锁前的主路线）**：WSL `Ubuntu-24.04`（磁盘 `F:\WSL\Ubuntu-24.04\ext4.vhdx`），
   `C:\Users\Administrator\.wslconfig` 设了 `networkingMode=mirrored`（WSL 才能用 Clash 7897）+ `autoMemoryReclaim=gradual`。
   三个脚本在 `tools/`：`wsl-root-packages.sh`（root 装 apt 包，含 JDK 17、gcc）→ `wsl-setup.sh`（~/android-sdk：android-36、
   build-tools 35、NDK r30；~/.gradle 代理）→ `wsl-build.sh`（同步到 ~/build/k-audio、按 build.sh 哈希缓存 ffmpeg、assembleRelease、
   APK 复制到 `apk\KAudio-<版本>.apk`）。用法：`wsl -d Ubuntu-24.04 -- bash /mnt/d/AiWork/Android/k-audio-app/tools/wsl-build.sh`，
   日志重定向到 ~/build.log 再 grep。用户要求：不用时 `wsl --shutdown` 关掉；GitHub 解封后本地环境停用。
-  **没开稀疏 VHD**（WSL 提示该功能可能损坏数据，已关回去）。11-09 进度：lame/ogg/vorbis/opus/x264/x265 已编过，
-  ffmpeg configure 缺宿主 gcc 失败 → 已补 gcc 到脚本、在装；装完重跑 wsl-build.sh，再修 Kotlin 编译错误（0.3.0 还没编过）。
-  脚本还没提交。
+  **没开稀疏 VHD**（WSL 提示该功能可能损坏数据，已关回去）。脚本已提交（`4a39a36`）。
+  网络坑（11-09 实测）：经 Clash 拉 archive.ubuntu.com 只有约 2 KB/s（apt 卡死），拉 Google / Maven Central 时不时
+  「Remote host terminated the handshake」整次构建失败；阿里云镜像直连快得多。所以 `wsl-root-packages.sh` 改成从阿里云下 .deb
+  （不改系统软件源），`wsl-setup.sh` 写 `~/.gradle/init.d/aliyun-mirror.gradle`（阿里云镜像排前面、原仓库兜底，nonProxyHosts 加了阿里云）。
+  11-09 编出 0.3.0：ffmpeg 首次连依赖库约 15 分钟，之后按 build.sh 哈希走缓存（`~/build/ffmpeg-cache`）；Gradle 首次约 7 分钟。
+  看结果以日志里出现 `OK -> …/apk/KAudio-<版本>.apk` 为准（ffmpeg 那步也会打一行 `OK -> …/out/ffmpeg`，别看错）。
+  在 PowerShell 里调 `wsl … bash -c "…; echo exit=\$?"` 时 `$?` 会被 PowerShell 或 wsl 外层 shell 先展开，记下的 exit 不可信。
 - 之前（2026-11-06）：0.1.0（暖色，照 K功课）出过一版后，用户要求换风格；**0.2.0 深色录音棚风**
   CI 绿灯（run `42173807066`），`apk\KAudio-0.2.0.apk`（约 32.7 MB，含 19.2 MB `libffmpeg.so`）已 adb 装到用户手机。
   新配色和图标还没在手机上看过效果，功能也还没真机验证，等用户反馈。

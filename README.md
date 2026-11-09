@@ -60,5 +60,7 @@ gh run watch <run_id> -R shawnbugs/k-audio
 gh run download <run_id> -R shawnbugs/k-audio -n KAudio-<版本> -D /d/AiWork/Android/k-audio-app/apk
 ```
 
+- Actions 用不了时在本地 WSL（Ubuntu 24.04）打包：`tools/wsl-root-packages.sh`（root）→ `tools/wsl-setup.sh` → `tools/wsl-build.sh`，
+  APK 直接出到 `apk\KAudio-<版本>.apk`，细节见 [交接文档](docs/HANDOFF.md) §4「本地打包」。
 - 只出正式版（assembleRelease），固定签名 `app/debug.keystore`（本 App 独立生成），新包直接覆盖安装。
 - 只支持 arm64 手机，Android 10 及以上。
