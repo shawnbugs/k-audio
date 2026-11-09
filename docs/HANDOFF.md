@@ -54,7 +54,7 @@
   学校填了北京大学（美国实体清单）；已建议用户在工单里照实补充说明、请客服去掉这个学校关联，**别改填别的假学校**。
   **2026-11-09 起本地 WSL 打包**（见下面「本地打包」），**0.3.0 已在本地编出来**：ffmpeg（含 x264/x265，x265 的 NEON 汇编编过了、
   没退纯 C；NEEDED 只有 libm/libz/libdl/libc）+ Kotlin 一次编过（只有 4 个警告，没改源码）。APK 约 34.7 MB（`libffmpeg.so` 23.6 MB），
-  签名与 0.2.0 相同，可 `adb install -r` 覆盖。GitHub 解锁后：`gh workflow run android.yml -R shawnbugs/k-audio --ref main` 确认 CI 也能过。
+  签名与 0.2.0 相同，**11-09 已 adb install -r 装到用户手机**（覆盖 0.2.0），等用户反馈。GitHub 解锁后：`gh workflow run android.yml -R shawnbugs/k-audio --ref main` 确认 CI 也能过。
   **全部视频功能都还没在真机上验证**。验证重点：取画面速度（每帧起一次 ffmpeg）、逐帧 / 全屏、H.264 / H.265 / 无损快剪导出
   （H.265 在手机上的速度）、无声视频、导出到 Movies/K剪音 相册能否看到；以及 0.2.0 起没验证的音频功能（见下）。
 - **本地打包（2026-11-09 搭，GitHub 解锁前的主路线）**：WSL `Ubuntu-24.04`（磁盘 `F:\WSL\Ubuntu-24.04\ext4.vhdx`），
