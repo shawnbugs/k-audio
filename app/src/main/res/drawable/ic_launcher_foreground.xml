@@ -1,34 +1,27 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-    0.5.1：粗白线条剪刀（两个圈把手 + 交叉刀刃），左上错开一道薄荷青、右下错开一道紫色当「重影」。
-    108 画布，内容都在中心半径 33 的安全区以内。三层路径相同，只是平移不同
+    0.5.2：用户自己设计的图标。上下两道薄荷青横条，一条青色斜带从左下连到右上（压在最上面），
+    一条紫色斜带从左上斜到右下（压在横条下面）。图形占可见区（中间 72）的约 65%，都在安全区以内
 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <group
-        android:translateX="-2"
-        android:translateY="-1.5">
-        <path
-            android:pathData="M45.9,65L68,26M62.1,65L40,26M34,72a8,8 0,1 0,16 0a8,8 0,1 0,-16 0M58,72a8,8 0,1 0,16 0a8,8 0,1 0,-16 0"
-            android:strokeWidth="6.5"
-            android:strokeColor="#FF36D6B0"
-            android:strokeLineCap="round" />
-    </group>
-    <group
-        android:translateX="2"
-        android:translateY="1.5">
-        <path
-            android:pathData="M45.9,65L68,26M62.1,65L40,26M34,72a8,8 0,1 0,16 0a8,8 0,1 0,-16 0M58,72a8,8 0,1 0,16 0a8,8 0,1 0,-16 0"
-            android:strokeWidth="6.5"
-            android:strokeColor="#FF9B8CFF"
-            android:strokeLineCap="round" />
-    </group>
+    <!-- 紫色斜带 -->
     <path
-        android:pathData="M45.9,65L68,26M62.1,65L40,26M34,72a8,8 0,1 0,16 0a8,8 0,1 0,-16 0M58,72a8,8 0,1 0,16 0a8,8 0,1 0,-16 0"
-        android:strokeWidth="6.5"
-        android:strokeColor="#FFFFFFFF"
-        android:strokeLineCap="round" />
+        android:fillColor="#FF9B8CFF"
+        android:pathData="M31,38.5L77.4,65.5L77.4,73.5L31,46.5Z" />
+    <!-- 上横条 -->
+    <path
+        android:fillColor="#FF36D6B0"
+        android:pathData="M34.75,33.5H69.25A3.75,3.75 0,0 1,73 37.25A3.75,3.75 0,0 1,69.25 41H34.75A3.75,3.75 0,0 1,31 37.25A3.75,3.75 0,0 1,34.75 33.5Z" />
+    <!-- 下横条 -->
+    <path
+        android:fillColor="#FF36D6B0"
+        android:pathData="M34.75,66.5H69.25A3.75,3.75 0,0 1,73 70.25A3.75,3.75 0,0 1,69.25 74H34.75A3.75,3.75 0,0 1,31 70.25A3.75,3.75 0,0 1,34.75 66.5Z" />
+    <!-- 青色斜带 -->
+    <path
+        android:fillColor="#FF36D6B0"
+        android:pathData="M31,63L77.4,34.5L77.4,42.5L31,71Z" />
 </vector>

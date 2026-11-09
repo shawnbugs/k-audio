@@ -1,13 +1,15 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 主题图标（Android 13+ 单色）：同前景的剪刀，去掉彩色重影 -->
+<!-- 主题图标（Android 13+ 单色）：同前景，紫色斜带用半透明区分 -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
     <path
-        android:pathData="M45.9,65L68,26M62.1,65L40,26M34,72a8,8 0,1 0,16 0a8,8 0,1 0,-16 0M58,72a8,8 0,1 0,16 0a8,8 0,1 0,-16 0"
-        android:strokeWidth="6.5"
-        android:strokeColor="#FFFFFFFF"
-        android:strokeLineCap="round" />
+        android:fillAlpha="0.55"
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M31,38.5L77.4,65.5L77.4,73.5L31,46.5Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M34.75,33.5H69.25A3.75,3.75 0,0 1,73 37.25A3.75,3.75 0,0 1,69.25 41H34.75A3.75,3.75 0,0 1,31 37.25A3.75,3.75 0,0 1,34.75 33.5ZM34.75,66.5H69.25A3.75,3.75 0,0 1,73 70.25A3.75,3.75 0,0 1,69.25 74H34.75A3.75,3.75 0,0 1,31 70.25A3.75,3.75 0,0 1,34.75 66.5ZM31,63L77.4,34.5L77.4,42.5L31,71Z" />
 </vector>
