@@ -47,7 +47,9 @@
   **0.3.0 代码已推送**（`7c1fca6` ffmpeg 加 x264/x265/bmp，下一个提交是 App 代码），但 GitHub Actions 从这次起报
   「recent account payments have failed or your spending limit needs to be increased」，任务根本没启动（startup_failure）。
   查下来不是额度（11 月只用 0.34/12 美元），是账号的账单信息被 GitHub 按贸易管制判为不合格，私有仓库 Actions 被锁，
-  用户 2026-11-07 已向 GitHub Support 提交工单（单位是误填），等回复；或把仓库改公开、或换地方编译——
+  用户 2026-11-07 已向 GitHub Support 提交工单（单位是误填），等回复；11-08 重跑仍 startup_failure；
+  11-09 发现「预算和提醒」里 Actions 等 5 项预算都是 $0 且 Usage blocked，想改成 $1 要先绑卡、绑卡又被贸易管制挡回，
+  改不了，别再让用户试。出路：等工单，或把仓库改公开、或本地 WSL 编译（Ubuntu 24.04 已装，评估见会话）——
   **代码还没编译过，ffmpeg 新脚本也没跑过**。用户处理好账单后：`gh workflow run android.yml -R shawnbugs/k-audio --ref main`，
   看 ffmpeg job 能否过（x265 的 NEON 汇编编不过会自动退纯 C，日志里有「!!!!」提示），再修 Kotlin 编译错误。
   验证重点：取画面速度（每帧起一次 ffmpeg）、H.265 在手机上的导出速度、无声视频、导出到 Movies/K剪音 相册能否看到。
