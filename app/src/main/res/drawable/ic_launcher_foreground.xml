@@ -1,49 +1,34 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- 一刀切开的声波：左段薄荷青、右段紫色，中间一道白色斜刀口。108 画布，内容都在中心半径 33 以内 -->
+<!--
+    0.5.1：粗白线条剪刀（两个圈把手 + 交叉刀刃），左上错开一道薄荷青、右下错开一道紫色当「重影」。
+    108 画布，内容都在中心半径 33 的安全区以内。三层路径相同，只是平移不同
+-->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp"
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- 左段声波 -->
+    <group
+        android:translateX="-2"
+        android:translateY="-1.5">
+        <path
+            android:pathData="M45.9,65L68,26M62.1,65L40,26M34,72a8,8 0,1 0,16 0a8,8 0,1 0,-16 0M58,72a8,8 0,1 0,16 0a8,8 0,1 0,-16 0"
+            android:strokeWidth="6.5"
+            android:strokeColor="#FF36D6B0"
+            android:strokeLineCap="round" />
+    </group>
+    <group
+        android:translateX="2"
+        android:translateY="1.5">
+        <path
+            android:pathData="M45.9,65L68,26M62.1,65L40,26M34,72a8,8 0,1 0,16 0a8,8 0,1 0,-16 0M58,72a8,8 0,1 0,16 0a8,8 0,1 0,-16 0"
+            android:strokeWidth="6.5"
+            android:strokeColor="#FF9B8CFF"
+            android:strokeLineCap="round" />
+    </group>
     <path
-        android:pathData="M22,54C24.52,46 26.48,46 29,54C31.52,70 33.48,70 36,54C38.52,32.67 40.48,32.67 43,54C45.52,67.33 47.48,67.33 50,54"
-        android:strokeWidth="4.6"
-        android:strokeLineCap="round"
-        android:strokeLineJoin="round">
-        <aapt:attr name="android:strokeColor">
-            <gradient
-                android:endColor="#FF2BBF9E"
-                android:endX="50"
-                android:endY="54"
-                android:startColor="#FF6EF5D2"
-                android:startX="22"
-                android:startY="54"
-                android:type="linear" />
-        </aapt:attr>
-    </path>
-    <!-- 右段声波 -->
-    <path
-        android:pathData="M58,54C60.52,35.33 62.48,35.33 65,54C67.52,75.33 69.48,75.33 72,54C74.52,40.67 76.48,40.67 79,54C81.52,60.67 83.48,60.67 86,54"
-        android:strokeWidth="4.6"
-        android:strokeLineCap="round"
-        android:strokeLineJoin="round">
-        <aapt:attr name="android:strokeColor">
-            <gradient
-                android:endColor="#FF7C6CF0"
-                android:endX="86"
-                android:endY="54"
-                android:startColor="#FFB8ADFF"
-                android:startX="58"
-                android:startY="54"
-                android:type="linear" />
-        </aapt:attr>
-    </path>
-    <!-- 刀口 -->
-    <path
-        android:pathData="M59.5,29L48.5,79"
-        android:strokeWidth="3"
+        android:pathData="M45.9,65L68,26M62.1,65L40,26M34,72a8,8 0,1 0,16 0a8,8 0,1 0,-16 0M58,72a8,8 0,1 0,16 0a8,8 0,1 0,-16 0"
+        android:strokeWidth="6.5"
         android:strokeColor="#FFFFFFFF"
         android:strokeLineCap="round" />
 </vector>

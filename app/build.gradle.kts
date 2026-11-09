@@ -13,8 +13,8 @@ android {
         // Android 10+：导出用 MediaStore 写「音乐」目录，不需要存储权限
         minSdk = 29
         targetSdk = 36
-        versionCode = 5
-        versionName = "0.5.0"
+        versionCode = 6
+        versionName = "0.5.1"
         // ffmpeg 只编了 arm64（近几年的手机都是），包不至于翻倍
         ndk { abiFilters += "arm64-v8a" }
     }
