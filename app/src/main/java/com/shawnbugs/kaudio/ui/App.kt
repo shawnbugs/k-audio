@@ -78,6 +78,9 @@ import java.util.Locale
 
 const val AUTHOR = "司徒王允"
 
+/** H.264 / H.265 格式下的合并说明（0.5.0） */
+private const val MERGE_VIDEO_TIP = "「合并成一个」按列表顺序把视频接成一个视频（尺寸照第一个，比例不同的补黑边，纯音频文件跳过）"
+
 /** 输入弹框：onOk 返回错误提示（null = 成功，关闭弹框） */
 private class InputSpec(
     val title: String,
@@ -157,7 +160,7 @@ fun App() {
             text = {
                 Text(
                     "作者：$AUTHOR\n\n" +
-                        "由 PC 版「音视频转换剪辑工具」改编：剪掉不要的部分、调音量、加淡入淡出，再转成想要的格式；视频可以剪完导出成视频，也可以只提取声音，或者把画面和声音分离成两个文件；多个文件可以合并成一个音频。\n\n" +
+                        "由 PC 版「音视频转换剪辑工具」改编：剪掉不要的部分、调音量、加淡入淡出，再转成想要的格式；视频可以剪完导出成视频，也可以只提取声音，或者把画面和声音分离成两个文件；多个文件可以合并成一个音频，多个视频也可以合并成一个视频。\n\n" +
                         "导出的音频在手机存储的 Music/K剪音 目录（音乐 App 里也能看到），视频在 Movies/K剪音（相册里能看到）。\n\n" +
                         "内置 FFmpeg 7.1（GPL），带 x264 / x265 / LAME / Vorbis / Opus 编码器。不联网。",
                     fontSize = 14.sp,
@@ -539,11 +542,12 @@ private fun ParamCard() {
                 "两边都不重新编码，很快、质量不变；剪过的按剪辑结果拆。删了中间部分或加了效果时，" +
                 "画面改成高画质 H.264 重新编码，声音按原格式重新编码"
             fmt.video && fmt.copy -> "\n无损快剪：不重新编码，几秒完成、画质不变；但开头会对齐到最近的关键帧（可能早零点几秒到几秒）。" +
-                "删了中间部分或加了效果时会自动改成高画质 H.264 重新编码"
-            fmt.codec == "libx265" -> "\nH.265：同样画质文件约小一半，但用手机 CPU 编码比 H.264 慢好几倍；老手机 / 老电脑可能播不了。分辨率只缩小不放大"
-            fmt.video -> "\nH.264：兼容性最好，哪里都能播；用手机 CPU 编码，长视频要等一会儿。分辨率只缩小不放大（竖屏按短边算）"
+                "删了中间部分或加了效果时会自动改成高画质 H.264 重新编码。" +
+                "「合并成一个」：视频都没剪、格式都一样时直接拼接，否则也改成 H.264 重新编码"
+            fmt.codec == "libx265" -> "\nH.265：同样画质文件约小一半，但用手机 CPU 编码比 H.264 慢好几倍；老手机 / 老电脑可能播不了。分辨率只缩小不放大。" + MERGE_VIDEO_TIP
+            fmt.video -> "\nH.264：兼容性最好，哪里都能播；用手机 CPU 编码，长视频要等一会儿。分辨率只缩小不放大（竖屏按短边算）。" + MERGE_VIDEO_TIP
             fmt.copy -> "\n保持原格式：只截一段时不重新编码（无损、很快）；视频文件会直接提取原音轨（如 aac → m4a）"
-            else -> "\n视频文件也能选音频格式，直接把声音提取出来。「合并成一个」按列表顺序把全部文件接成一个"
+            else -> "\n视频文件也能选音频格式，直接把声音提取出来。「合并成一个」按列表顺序把全部文件接成一个音频；要合并成视频请选视频格式"
         }
         Text(
             if (fmt.split) tip else "保存到手机存储的 " + (if (fmt.video) "Movies" else "Music") + "/${Studio.OUT_DIR}" + tip,
@@ -652,7 +656,7 @@ private fun ExportBar(onExport: (all: Boolean, merge: Boolean) -> Unit) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 val pad = PaddingValues(horizontal = 4.dp)
                 Pill("导出当前", Modifier.weight(1f), enabled = Studio.current != null, height = 46.dp, padding = pad) { onExport(false, false) }
-                // 合并：只对音频格式有用，选了别的格式点了会提示
+                // 合并：音频格式合并成一个音频，视频格式合并成一个视频；「保持原格式」和「音视频分离」点了会提示
                 Pill("合并成一个", Modifier.weight(1f), enabled = Studio.files.size >= 2, height = 46.dp, padding = pad) { onExport(true, true) }
                 Pill("全部导出 (${Studio.files.size})", Modifier.weight(1f), primary = true, enabled = Studio.files.isNotEmpty(), height = 46.dp, padding = pad) { onExport(true, false) }
             }

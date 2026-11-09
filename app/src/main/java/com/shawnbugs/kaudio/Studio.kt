@@ -61,7 +61,10 @@ class ExportItem(
     val audio: String?, val video: String?,
 )
 
-/** height / quality / keepAudio 只对视频格式有用（同 PC 版）；merge = 把 items 按顺序合并成一个音频文件（0.4.0） */
+/**
+ * height / quality / keepAudio 只对视频格式有用（同 PC 版）；
+ * merge = 把 items 按顺序合并成一个文件：音频格式合并声音（0.4.0），视频格式合并画面和声音（0.5.0）
+ */
 data class Job(
     val fmt: FormatInfo, val channels: Int, val rate: String?, val bitrate: String?,
     val height: Int, val quality: Int, val keepAudio: Boolean,
@@ -646,7 +649,7 @@ object Studio {
 
     // ================= 导出 =================
 
-    /** all：导出列表里全部文件；merge：把全部文件按列表顺序合并成一个音频文件 */
+    /** all：导出列表里全部文件；merge：把全部文件按列表顺序合并成一个文件（音频格式 = 一个音频，视频格式 = 一个视频） */
     fun startExport(all: Boolean, merge: Boolean = false) {
         if (exporting) return
         if (!Ffmpeg.available(app)) { toast("找不到内置的 ffmpeg"); return }
@@ -655,7 +658,14 @@ object Studio {
         val fmt = Formats.list[fmtIdx]
         if (merge) {
             if (items.size < 2) { toast("至少添加两个文件才能合并"); return }
-            if (fmt.video || fmt.copy) { toast("合并要选一种音频格式（MP3、WAV 等），在上面「格式」里选"); return }
+            if (fmt.split || (fmt.copy && !fmt.video)) {
+                toast("合并要选一种具体格式：音频（MP3、WAV 等）或视频（H.264 / H.265 / 无损快剪），在上面「格式」里选"); return
+            }
+            if (fmt.video) {
+                val videos = items.count { it.video != null }
+                if (videos < 2) { toast("列表里的视频不到两个，没法合并成视频"); return }
+                if (videos < items.size) toast("有 ${items.size - videos} 个纯音频文件，合并视频时跳过")
+            }
         }
         if (playing) pausePlay()
         val job = Job(
@@ -774,6 +784,7 @@ object Studio {
      * 再统一采样率和声道（concat 要求一致；没选采样率时用 44100），最后按所选格式编码一次。
      */
     private fun runMerge(job: Job, report: (Float, String) -> Unit): Pair<Int, Int> {
+        if (job.fmt.video) return runMergeVideo(job, report)
         log("—— 合并 ${job.items.size} 个文件 ——")
         val items = job.items.filter { it.path.exists() && it.audio != null }
         for (it in job.items) if (it !in items) log("  跳过 ${it.name}：" + if (!it.path.exists()) "文件不存在" else "没有声音")
@@ -802,6 +813,116 @@ object Studio {
         val total = if (lens.all { it > 0 }) lens.sum() else -1.0
         val err = runFfmpeg(a, total, stepProgress(0, 1, "合并", report))
         return if (save(err, tmp, outName, ext, false)) 1 to 0 else 0 to 1
+    }
+
+    /**
+     * 把列表里的视频按顺序接成一个视频（0.5.0），纯音频文件跳过。
+     * 无损快剪：全都没剪、编码 / 分辨率 / 帧率（保留声音时还有声音格式）都一样，才用 concat 分离器直接拼（-c copy）；
+     * 否则改成 H.264 高画质重新编码。重新编码时每个文件先套自己的剪辑和效果，再缩放到同一个尺寸
+     * （第一个视频的尺寸，选了分辨率就按所选的缩；保持比例，不够的地方补黑边居中）、统一帧率，
+     * 声音统一成 48k 立体声，没有声音的视频补一段等长静音，最后 concat 一起编码一次。
+     */
+    private fun runMergeVideo(job: Job, report: (Float, String) -> Unit): Pair<Int, Int> {
+        log("—— 合并 ${job.items.size} 个文件成一个视频 ——")
+        val items = job.items.filter { it.path.exists() && it.video != null }
+        for (it in job.items) if (it !in items) log("  跳过 ${it.name}：" + if (!it.path.exists()) "文件不存在" else "纯音频文件，没有画面")
+        if (items.size < 2) { log("  × 视频不到两个，没法合并"); return 0 to 1 }
+        items.forEachIndexed { k, it -> log("  ${k + 1}. ${it.name}") }
+        val audio = job.keepAudio && items.any { it.audio != null }
+        val lens = items.map { it.edit?.length ?: it.srcDur }
+        val total = if (lens.all { it > 0 }) lens.sum() else -1.0
+        val base = items[0].baseName + "_等${items.size}个合并"
+        val onFrac = stepProgress(0, 1, "合并", report)
+
+        if (job.fmt.copy) {
+            val why = mergeCopyBlocker(items, audio)
+            if (why == null) {
+                val ext = items[0].ext.ifEmpty { ".mkv" }
+                val tmp = File(app.cacheDir, "out/${System.nanoTime()}$ext")
+                val list = File(app.cacheDir, "out/${System.nanoTime()}_list.txt")
+                try {
+                    // concat 分离器的列表文件：路径用单引号括起来，路径里的单引号写成 '\''
+                    list.writeText(items.joinToString("\n") { "file '" + it.path.path.replace("'", "'\\''") + "'" } + "\n")
+                    val a = arrayListOf("-hide_banner", "-nostdin", "-y", "-f", "concat", "-safe", "0", "-i", list.path, "-map", "0:v:0")
+                    if (audio) a += listOf("-map", "0:a:0") else a += "-an"
+                    a += listOf("-c", "copy", "-avoid_negative_ts", "make_zero")
+                    if (ext == ".mp4" || ext == ".mov") a += listOf("-movflags", "+faststart")
+                    a += listOf("-progress", "pipe:1", "-nostats", tmp.path)
+                    log("  格式都一样，直接拼接，不重新编码")
+                    val err = runFfmpeg(a, total, onFrac)
+                    return if (save(err, tmp, base + ext, ext, true)) 1 to 0 else 0 to 1
+                } finally {
+                    list.delete()
+                }
+            }
+            log("  $why，无法无损快剪，改为高画质 H.264 重新编码")
+        }
+
+        // 统一的画面尺寸和帧率：照第一个视频；选了分辨率时同单个导出一样只缩不放（横屏按高、竖屏按宽）
+        val (w0, h0) = Ffmpeg.videoSize(items[0].video!!) ?: (1280 to 720)
+        val limit = if (job.fmt.copy) 0 else job.height
+        var w = w0
+        var h = h0
+        if (limit > 0 && w0 > h0 && h0 > limit) { h = limit; w = Math.round(w0 * limit / h0.toDouble()).toInt() }
+        else if (limit > 0 && w0 <= h0 && w0 > limit) { w = limit; h = Math.round(h0 * limit / w0.toDouble()).toInt() }
+        w = w / 2 * 2; h = h / 2 * 2   // H.264 / H.265 要求偶数
+        val fps = Ffmpeg.fpsArg(Ffmpeg.videoFps(items[0].video!!))
+        log("  统一成 ${w}x$h、$fps fps" + if (audio) "，声音 48000 Hz 立体声" else "，不要声音")
+        val vNorm = "scale=$w:$h:force_original_aspect_ratio=decrease,pad=$w:$h:(ow-iw)/2:(oh-ih)/2:black,setsar=1,fps=$fps,format=yuv420p"
+        val aNorm = "aformat=sample_fmts=fltp:sample_rates=48000:channel_layouts=stereo"
+
+        val f = StringBuilder()
+        val a = arrayListOf("-hide_banner", "-nostdin", "-y")
+        items.forEachIndexed { k, it ->
+            val e = it.edit
+            val withAudio = audio && it.audio != null
+            if (e == null || e.isPureTrim) {
+                // 没剪或只截了一段：输入端定位（快），画面声音直接统一格式
+                if (e != null) {
+                    if (e.segs[0].a > 0.0005) a += listOf("-ss", Ffmpeg.t(e.segs[0].a))
+                    if (e.segs[0].b < it.srcDur - 0.001) a += listOf("-to", Ffmpeg.t(e.segs[0].b))
+                }
+                a += listOf("-i", it.path.path)
+                f.append("[$k:v]").append(vNorm).append("[v$k];")
+                if (withAudio) f.append("[$k:a]").append(aNorm).append("[a$k];")
+            } else {
+                // 删了中间或加了效果：套这个文件自己的剪辑滤镜，统一尺寸放在拼接之后、淡入淡出之前
+                a += listOf("-i", it.path.path)
+                f.append(Ffmpeg.buildFilter(e, true, withAudio, vNorm, k, "f${k}_")).append(';')
+                f.append("[f${k}_vout]null[v$k];")
+                if (withAudio) f.append("[f${k}_aout]").append(aNorm).append("[a$k];")
+            }
+            if (audio && it.audio == null) {
+                // 这个视频没有声音：补一段等长静音，concat 要求每段都有声音（滤镜里的 anullsrc，不需要 lavfi 设备）
+                val len = if (lens[k] > 0) lens[k] else 0.1
+                f.append("anullsrc=r=48000:cl=stereo,atrim=duration=").append(Ffmpeg.t(len)).append(',').append(aNorm).append("[a$k];")
+                log("  ${it.name} 没有声音，补 ${fmtTime(len)} 静音")
+            }
+        }
+        for (k in items.indices) f.append("[v$k]").append(if (audio) "[a$k]" else "")
+        f.append("concat=n=").append(items.size).append(":v=1:a=").append(if (audio) 1 else 0).append("[vout]")
+        if (audio) f.append("[aout]")
+        a += listOf("-filter_complex", f.toString(), "-map", "[vout]")
+        if (audio) a += listOf("-map", "[aout]") else a += "-an"
+        val copyFallback = job.fmt.copy
+        a += videoCodecArgs(if (copyFallback) "libx264" else job.fmt.codec, if (copyFallback) 0 else job.quality, true)
+        if (audio) a += listOf("-c:a", "aac", "-b:a", "192k")
+        a += listOf("-movflags", "+faststart")
+        val tmp = File(app.cacheDir, "out/${System.nanoTime()}.mp4")
+        a += listOf("-progress", "pipe:1", "-nostats", tmp.path)
+        val err = runFfmpeg(a, total, onFrac)
+        return if (save(err, tmp, "$base.mp4", ".mp4", true)) 1 to 0 else 0 to 1
+    }
+
+    /** 视频无损快剪合并：能直接拼返回 null，不能就返回原因 */
+    private fun mergeCopyBlocker(items: List<ExportItem>, audio: Boolean): String? {
+        if (items.any { it.edit != null }) return "有视频剪辑过或加了效果"
+        if (items.map { Ffmpeg.videoKey(it.video!!) }.distinct().size > 1) return "各视频的编码 / 分辨率 / 帧率不一样"
+        if (audio) {
+            if (items.any { it.audio == null }) return "有的视频没有声音"
+            if (items.map { Ffmpeg.audioKey(it.audio!!) }.distinct().size > 1) return "各视频的声音格式不一样"
+        }
+        return null
     }
 
     /** ffmpeg 跑完后：成功就存进「Movies」或「音乐」并加进结果列表；中间文件都删掉 */
@@ -886,6 +1007,15 @@ object Studio {
             a += listOf("-filter_complex", Ffmpeg.buildFilter(e!!, true, audio, scale), "-map", "[vout]")
             if (audio) a += listOf("-map", "[aout]") else a += "-an"
         }
+        a += videoCodecArgs(codec, q, mp4)
+        if (audio) a += listOf("-c:a", "aac", "-b:a", "192k")
+        if (mp4) a += listOf("-movflags", "+faststart")
+        return a
+    }
+
+    /** 视频编码参数：H.264 / H.265 + 画质（CRF 同 PC 版）+ yuv420p；单个导出和合并共用 */
+    private fun videoCodecArgs(codec: String, q: Int, mp4: Boolean): List<String> {
+        val a = ArrayList<String>()
         if (codec == "libx265") {
             a += listOf("-c:v", "libx265", "-preset", "fast", "-crf", Formats.crfX265[q].toString(), "-x265-params", "log-level=error")
             if (mp4) a += listOf("-tag:v", "hvc1")   // 苹果设备需要这个标记才能播 H.265
@@ -893,8 +1023,6 @@ object Studio {
             a += listOf("-c:v", "libx264", "-preset", "fast", "-crf", Formats.crfX264[q].toString())
         }
         a += listOf("-pix_fmt", "yuv420p")
-        if (audio) a += listOf("-c:a", "aac", "-b:a", "192k")
-        if (mp4) a += listOf("-movflags", "+faststart")
         return a
     }
 

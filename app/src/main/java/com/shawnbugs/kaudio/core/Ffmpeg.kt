@@ -65,18 +65,32 @@ object Ffmpeg {
 
     class Probe(val duration: Double, val audio: String?, val video: String?)
 
-    /** 只读文件头：时长 + 第一条音轨的描述（如「aac (LC), 44100 Hz, stereo, fltp, 128 kb/s」）+ 第一条视频流的描述 */
+    /**
+     * 只读文件头：时长 + 第一条音轨的描述（如「aac (LC), 44100 Hz, stereo, fltp, 128 kb/s」）+ 第一条视频流的描述。
+     * 手机竖着拍的视频常是横的画面带「旋转 90 度」标记（ffmpeg 滤镜里会自动转正），这时在视频描述后面加「, rotate=90」，
+     * 合并视频时按转正后的尺寸算（0.5.0）。
+     */
     fun probe(ctx: Context, path: String): Probe {
         var dur = -1.0
         var audio: String? = null
         var video: String? = null
+        var inVideo = false   // 正在读第一条视频流下面的附加信息（旋转标记在那里）
+        var rot = 0
         run(ctx, listOf("-hide_banner", "-nostdin", "-i", path), onErr = { line ->
             if (dur < 0) parseDuration(line)?.let { dur = it }
-            if (audio == null) parseAudio(line)?.let { audio = it }
-            if (video == null) parseVideo(line)?.let { video = it }
+            if (line.contains("Stream #")) {
+                inVideo = false
+                if (audio == null) parseAudio(line)?.let { audio = it }
+                if (video == null) parseVideo(line)?.let { video = it; inVideo = true }
+            } else if (inVideo && rot == 0) {
+                ROT_RE.find(line)?.groupValues?.get(1)?.toDoubleOrNull()?.let { rot = Math.round(abs(it)).toInt() % 360 }
+            }
         })
+        if (rot == 90 || rot == 270) video = video?.let { "$it, rotate=90" }
         return Probe(dur, audio, video)
     }
+
+    private val ROT_RE = Regex("""rotation of (-?[\d.]+) degrees""")
 
     /** 从视频描述里取出「视频 1920x1080 · 30 fps · h264」 */
     fun videoSummary(desc: String): String {
@@ -88,6 +102,38 @@ object Ffmpeg {
 
     /** 帧率（逐帧按钮用）；取不到返回 null */
     fun videoFps(desc: String): Double? = FPS_RE.find(desc)?.groupValues?.get(1)?.toDoubleOrNull()?.takeIf { it in 1.0..240.0 }
+
+    /** 画面显示出来的宽高（带旋转标记的已对调）；取不到返回 null */
+    fun videoSize(desc: String): Pair<Int, Int>? {
+        val m = SIZE_RE.find(desc) ?: return null
+        val w = m.groupValues[1].toInt()
+        val h = m.groupValues[2].toInt()
+        return if (desc.contains("rotate=90")) h to w else w to h
+    }
+
+    /** 判断几个视频能不能直接拼（无损快剪合并）用：编码、像素格式、尺寸、帧率、旋转都一样才算同一种 */
+    fun videoKey(desc: String): String {
+        val codec = desc.split(' ', ',').firstOrNull { it.isNotEmpty() } ?: ""
+        val pix = PIX_RE.find(desc)?.value ?: ""
+        return listOf(codec, pix, SIZE_RE.find(desc)?.value ?: "", FPS_RE.find(desc)?.groupValues?.get(1) ?: "", desc.contains("rotate=90")).joinToString("|")
+    }
+
+    /** 同上，声音：编码、采样率、声道一样才算同一种（比特率不管） */
+    fun audioKey(desc: String): String {
+        val p = desc.split(", ")
+        val i = p.indexOfFirst { it.endsWith(" Hz") }
+        return p[0].substringBefore(' ') + "|" + (if (i >= 0) p.subList(i, minOf(p.size, i + 2)).joinToString(",") else "")
+    }
+
+    /** 合并视频时统一用的帧率参数：29.97 之类写成分数，接近整数的取整（手机录像常是 29.9x 的可变帧率） */
+    fun fpsArg(f: Double?): String {
+        if (f == null) return "30"
+        for ((v, s) in listOf(23.976 to "24000/1001", 29.97 to "30000/1001", 59.94 to "60000/1001")) if (abs(f - v) < 0.02) return s
+        val n = Math.round(f)
+        return if (abs(f - n) < 0.15) n.toString() else t(f)
+    }
+
+    private val PIX_RE = Regex("""\b(yuvj?\d{3}p\w*|nv\d{2}|gray\w*|rgb\w+|bgr\w+)""")
 
     private val SIZE_RE = Regex("""\b(\d{2,5})x(\d{2,5})\b""")
     private val FPS_RE = Regex("""([\d.]+)\s*fps""")
