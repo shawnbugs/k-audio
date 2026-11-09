@@ -123,34 +123,37 @@ object Ffmpeg {
      * 导出用滤镜：拆出各片段 → 拼接 → 音量 → 淡入淡出（与 PC 版 BuildFilter 完全一致）。
      * 输出标签 [vout]（有视频时）、[aout]（有音频时）。vpost：拼接后给画面加的处理（缩放等），可为 null；
      * 画面也跟着声音一起淡入淡出（从黑场进、到黑场出）。
+     * input：第几个输入文件；tag：所有中间标签和输出标签的前缀（合并多个文件时每个文件一套，互不冲突，输出变成 [<tag>aout]）。
      */
-    fun buildFilter(e: EditState, video: Boolean, audio: Boolean, vpost: String?): String {
+    fun buildFilter(e: EditState, video: Boolean, audio: Boolean, vpost: String?, input: Int = 0, tag: String = ""): String {
         val sb = StringBuilder()
         val n = e.segs.size
-        if (video) split(sb, "[0:v]", "split", "v", n)
-        if (audio) split(sb, "[0:a]", "asplit", "i", n)
+        val inV = "[$input:v]"
+        val inA = "[$input:a]"
+        if (video) split(sb, inV, "split", "${tag}v", n)
+        if (audio) split(sb, inA, "asplit", "${tag}i", n)
         for (i in 0 until n) {
             val a = t(e.segs[i].a)
             val b = t(e.segs[i].b)
-            if (video) sb.append(if (n > 1) "[v$i]" else "[0:v]")
+            if (video) sb.append(if (n > 1) "[${tag}v$i]" else inV)
                 .append("trim=start=").append(a).append(":end=").append(b)
-                .append(",setpts=PTS-STARTPTS[w").append(i).append("];")
-            if (audio) sb.append(if (n > 1) "[i$i]" else "[0:a]")
+                .append(",setpts=PTS-STARTPTS[${tag}w").append(i).append("];")
+            if (audio) sb.append(if (n > 1) "[${tag}i$i]" else inA)
                 .append("atrim=start=").append(a).append(":end=").append(b)
-                .append(",asetpts=PTS-STARTPTS[s").append(i).append("];")
+                .append(",asetpts=PTS-STARTPTS[${tag}s").append(i).append("];")
         }
-        var vc = "[w0]"
-        var ac = "[s0]"
+        var vc = "[${tag}w0]"
+        var ac = "[${tag}s0]"
         if (n > 1) {
             for (i in 0 until n) {
-                if (video) sb.append("[w").append(i).append(']')
-                if (audio) sb.append("[s").append(i).append(']')
+                if (video) sb.append("[${tag}w").append(i).append(']')
+                if (audio) sb.append("[${tag}s").append(i).append(']')
             }
             sb.append("concat=n=").append(n).append(":v=").append(if (video) 1 else 0).append(":a=").append(if (audio) 1 else 0)
-            if (video) sb.append("[vc]")
-            if (audio) sb.append("[ac]")
+            if (video) sb.append("[${tag}vc]")
+            if (audio) sb.append("[${tag}ac]")
             sb.append(';')
-            vc = "[vc]"; ac = "[ac]"
+            vc = "[${tag}vc]"; ac = "[${tag}ac]"
         }
         if (video) {
             val v = ArrayList<String>()
@@ -158,7 +161,7 @@ object Ffmpeg {
             if (e.fadeIn > 0) v.add("fade=t=in:st=0:d=" + t(e.fadeIn))
             if (e.fadeOut > 0) v.add("fade=t=out:st=" + t(e.length - e.fadeOut) + ":d=" + t(e.fadeOut))
             if (v.isEmpty()) v.add("null")
-            sb.append(vc).append(v.joinToString(",")).append("[vout]")
+            sb.append(vc).append(v.joinToString(",")).append("[${tag}vout]")
             if (audio) sb.append(';')
         }
         if (audio) {
@@ -167,7 +170,7 @@ object Ffmpeg {
             if (e.fadeIn > 0) f.add("afade=t=in:st=0:d=" + t(e.fadeIn))
             if (e.fadeOut > 0) f.add("afade=t=out:st=" + t(e.length - e.fadeOut) + ":d=" + t(e.fadeOut))
             if (f.isEmpty()) f.add("anull")
-            sb.append(ac).append(f.joinToString(",")).append("[aout]")
+            sb.append(ac).append(f.joinToString(",")).append("[${tag}aout]")
         }
         return sb.toString()
     }

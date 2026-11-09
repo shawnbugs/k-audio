@@ -1,6 +1,6 @@
 package com.shawnbugs.kaudio.core
 
-/** video = 导出成视频（0.3.0 起，同 PC 版 v4） */
+/** video = 导出成视频（0.3.0 起，同 PC 版 v4）；split = 音视频分离（0.4.0，一个视频出无声视频 + 原音轨两个文件） */
 class FormatInfo(
     val name: String,
     val ext: String,
@@ -8,6 +8,7 @@ class FormatInfo(
     val lossless: Boolean,
     val copy: Boolean,
     val video: Boolean = false,
+    val split: Boolean = false,
 )
 
 object Formats {
@@ -23,7 +24,12 @@ object Formats {
         FormatInfo("视频 MP4 (H.264)", ".mp4", "libx264", false, false, true),
         FormatInfo("视频 MP4 (H.265)", ".mp4", "libx265", false, false, true),
         FormatInfo("视频 无损快剪", "", "copy", false, true, true),
+        FormatInfo("音视频分离", "", "copy", false, true, split = true),
     )
+
+    /** 分离时两半各自照这两种格式导出：画面 = 无损快剪（去掉声音），声音 = 保持原格式 */
+    val keepAudio: FormatInfo get() = list.first { it.copy && !it.video && !it.split }
+    val videoCopy: FormatInfo get() = list.first { it.copy && it.video }
 
     /** 按名字找格式；0.2.0 以前存的「保持原格式」改名了 */
     fun indexOf(name: String?): Int =

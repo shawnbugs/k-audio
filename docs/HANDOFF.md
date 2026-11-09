@@ -1,6 +1,6 @@
 # K剪音 交接文档
 
-> 写于 2026-11-06，2026-11-09 更新；版本 **0.3.0**（versionCode 3；GitHub Actions 因账号被锁跑不了，2026-11-09 在本地 WSL 编出 `apk\KAudio-0.3.0.apk`，还没上真机）。**新会话先读本文，再读 [README](../README.md)**。
+> 写于 2026-11-06，2026-11-09 更新；版本 **0.4.0**（versionCode 4；GitHub Actions 因账号被锁跑不了，2026-11-09 在本地 WSL 编出 `apk\KAudio-0.4.0.apk`，还没装到手机）。**新会话先读本文，再读 [README](../README.md)**。
 > README 讲「功能现状、关键实现、构建」，本文讲「怎么接手、用户要什么、为什么这么做、还有什么没做」，两份不重复。
 
 ## 1. 一分钟上手
@@ -42,7 +42,13 @@
 
 ## 4. 没做完 / 没验证的
 
-- **当前进度（2026-11-07）**：用户要求把 PC 版 v4 的视频剪辑移植过来（PC 版交接在 `D:\AiWork\AudioTool\HANDOFF.md`）。
+- **当前进度（2026-11-09）0.4.0**：用户装上 0.3.0 后要了两个功能——**音视频分离**（用户明确说：就是把画面和声音拆成两个文件，
+  **不是 AI 人声分离**，别做复杂）和**多个音频合并成一个**。做法：格式表加「音视频分离」（`FormatInfo.split`；两半分别借用
+  「视频 无损快剪 + 去掉声音」和「保持原格式 (音频)」两条现成导出路径），底部栏加「合并成一个」（`Studio.runMerge`：一条 ffmpeg 命令
+  多个输入，每个文件 `buildFilter` 带 input/tag 套自己的剪辑，再 aformat 统一采样率声道后 concat；只支持具体音频格式）。
+  合并顺序 = 列表添加顺序，**没做拖动排序**（用户没提；真要再加）。编译过了，**真机都没验证**；合并的滤镜命令也还没在手机上跑过
+  （测试脚本思路：把 libffmpeg.so 推到 /data/local/tmp 用生成的 WAV 跑同样的参数，测完删掉）。
+- **0.3.0（2026-11-07）**：用户要求把 PC 版 v4 的视频剪辑移植过来（PC 版交接在 `D:\AiWork\AudioTool\HANDOFF.md`）。
   用户定的范围：视频导出 H.264 + H.265 + 无损快剪三种都做，画面预览照 PC 版（播放头一帧、拖边线看边线帧、逐帧、全屏）。
   **0.3.0 代码已推送**（`7c1fca6` ffmpeg 加 x264/x265/bmp，下一个提交是 App 代码），但 GitHub Actions 从这次起报
   「recent account payments have failed or your spending limit needs to be increased」，任务根本没启动（startup_failure）。

@@ -106,7 +106,7 @@ fun App() {
     }
 
     val addFiles = { picker.launch(Formats.pickMimes) }
-    val export = { all: Boolean ->
+    val export = { all: Boolean, merge: Boolean ->
         // 第一次导出时要通知权限（显示导出进度；拒绝也照样导出）
         if (Build.VERSION.SDK_INT >= 33 && !askedNotif &&
             ContextCompat.checkSelfPermission(ctx, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
@@ -114,7 +114,7 @@ fun App() {
             askedNotif = true
             notifPerm.launch(Manifest.permission.POST_NOTIFICATIONS)
         }
-        Studio.startExport(all)
+        Studio.startExport(all, merge)
     }
 
     Column(Modifier.fillMaxSize().background(A.Bg).systemBarsPadding()) {
@@ -157,7 +157,7 @@ fun App() {
             text = {
                 Text(
                     "作者：$AUTHOR\n\n" +
-                        "由 PC 版「音视频转换剪辑工具」改编：剪掉不要的部分、调音量、加淡入淡出，再转成想要的格式；视频可以剪完导出成视频，也可以只提取声音。\n\n" +
+                        "由 PC 版「音视频转换剪辑工具」改编：剪掉不要的部分、调音量、加淡入淡出，再转成想要的格式；视频可以剪完导出成视频，也可以只提取声音，或者把画面和声音分离成两个文件；多个文件可以合并成一个音频。\n\n" +
                         "导出的音频在手机存储的 Music/K剪音 目录（音乐 App 里也能看到），视频在 Movies/K剪音（相册里能看到）。\n\n" +
                         "内置 FFmpeg 7.1（GPL），带 x264 / x265 / LAME / Vorbis / Opus 编码器。不联网。",
                     fontSize = 14.sp,
@@ -516,14 +516,15 @@ private fun ParamCard() {
     Column(Modifier.card().padding(12.dp)) {
         SectionTitle("导出格式")
         Spacer(Modifier.height(8.dp))
-        // 视频格式时换成「分辨率 / 画质 / 声音」一组，位置相同（同 PC 版）
+        // 视频格式时换成「分辨率 / 画质 / 声音」一组，位置相同（同 PC 版）；音视频分离两边都不重新编码，没有参数可选
         Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Dropdown("格式", Formats.list.map { it.name }, Studio.fmtIdx, Modifier.weight(1f), !busy) { Studio.fmtIdx = it; Studio.saveSettings() }
-            if (fmt.video) Dropdown("分辨率", Formats.resolutions, Studio.resIdx, Modifier.weight(1f), !busy && !fmt.copy) { Studio.resIdx = it; Studio.saveSettings() }
+            if (fmt.split) Spacer(Modifier.weight(1f))
+            else if (fmt.video) Dropdown("分辨率", Formats.resolutions, Studio.resIdx, Modifier.weight(1f), !busy && !fmt.copy) { Studio.resIdx = it; Studio.saveSettings() }
             else Dropdown("采样率 (Hz)", Formats.rates, Studio.rateIdx, Modifier.weight(1f), !busy && !fmt.copy) { Studio.rateIdx = it; Studio.saveSettings() }
         }
         Spacer(Modifier.height(8.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        if (!fmt.split) Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             if (fmt.video) {
                 Dropdown("画质", Formats.qualities, Studio.qualityIdx, Modifier.weight(1f), !busy && !fmt.copy) { Studio.qualityIdx = it; Studio.saveSettings() }
                 Dropdown("声音", Formats.videoAudio, Studio.vAudioIdx, Modifier.weight(1f), !busy) { Studio.vAudioIdx = it; Studio.saveSettings() }
@@ -532,17 +533,20 @@ private fun ParamCard() {
                 Dropdown("声道", Formats.channels, Studio.chIdx, Modifier.weight(1f), !busy && !fmt.copy) { Studio.chIdx = it; Studio.saveSettings() }
             }
         }
-        Spacer(Modifier.height(8.dp))
+        if (!fmt.split) Spacer(Modifier.height(8.dp))
         val tip = when {
+            fmt.split -> "一个视频拆成两个文件：无声视频存 Movies/${Studio.OUT_DIR}，原来的声音存 Music/${Studio.OUT_DIR}。\n" +
+                "两边都不重新编码，很快、质量不变；剪过的按剪辑结果拆。删了中间部分或加了效果时，" +
+                "画面改成高画质 H.264 重新编码，声音按原格式重新编码"
             fmt.video && fmt.copy -> "\n无损快剪：不重新编码，几秒完成、画质不变；但开头会对齐到最近的关键帧（可能早零点几秒到几秒）。" +
                 "删了中间部分或加了效果时会自动改成高画质 H.264 重新编码"
             fmt.codec == "libx265" -> "\nH.265：同样画质文件约小一半，但用手机 CPU 编码比 H.264 慢好几倍；老手机 / 老电脑可能播不了。分辨率只缩小不放大"
             fmt.video -> "\nH.264：兼容性最好，哪里都能播；用手机 CPU 编码，长视频要等一会儿。分辨率只缩小不放大（竖屏按短边算）"
             fmt.copy -> "\n保持原格式：只截一段时不重新编码（无损、很快）；视频文件会直接提取原音轨（如 aac → m4a）"
-            else -> "\n视频文件也能选音频格式，直接把声音提取出来"
+            else -> "\n视频文件也能选音频格式，直接把声音提取出来。「合并成一个」按列表顺序把全部文件接成一个"
         }
         Text(
-            "保存到手机存储的 " + (if (fmt.video) "Movies" else "Music") + "/${Studio.OUT_DIR}" + tip,
+            if (fmt.split) tip else "保存到手机存储的 " + (if (fmt.video) "Movies" else "Music") + "/${Studio.OUT_DIR}" + tip,
             fontSize = 11.sp, color = A.Text3,
         )
     }
@@ -628,7 +632,7 @@ private fun LogCard() {
 // ———————————————————————————————— 底部导出栏
 
 @Composable
-private fun ExportBar(onExport: (Boolean) -> Unit) {
+private fun ExportBar(onExport: (all: Boolean, merge: Boolean) -> Unit) {
     Column(Modifier.fillMaxWidth().background(A.Card).padding(horizontal = 12.dp, vertical = 10.dp)) {
         if (Studio.exporting) {
             LinearProgressIndicator(
@@ -645,9 +649,12 @@ private fun ExportBar(onExport: (Boolean) -> Unit) {
             if (Studio.progressText.isNotEmpty()) {
                 Text(Studio.progressText, fontSize = 12.sp, color = A.Text2, modifier = Modifier.padding(bottom = 6.dp))
             }
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                Pill("导出当前", Modifier.weight(1f), enabled = Studio.current != null, height = 46.dp) { onExport(false) }
-                Pill("全部导出 (${Studio.files.size})", Modifier.weight(1f), primary = true, enabled = Studio.files.isNotEmpty(), height = 46.dp) { onExport(true) }
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                val pad = PaddingValues(horizontal = 4.dp)
+                Pill("导出当前", Modifier.weight(1f), enabled = Studio.current != null, height = 46.dp, padding = pad) { onExport(false, false) }
+                // 合并：只对音频格式有用，选了别的格式点了会提示
+                Pill("合并成一个", Modifier.weight(1f), enabled = Studio.files.size >= 2, height = 46.dp, padding = pad) { onExport(true, true) }
+                Pill("全部导出 (${Studio.files.size})", Modifier.weight(1f), primary = true, enabled = Studio.files.isNotEmpty(), height = 46.dp, padding = pad) { onExport(true, false) }
             }
         }
     }

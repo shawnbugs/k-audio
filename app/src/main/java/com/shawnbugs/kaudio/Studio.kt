@@ -61,11 +61,12 @@ class ExportItem(
     val audio: String?, val video: String?,
 )
 
-/** height / quality / keepAudio 只对视频格式有用（同 PC 版） */
-class Job(
+/** height / quality / keepAudio 只对视频格式有用（同 PC 版）；merge = 把 items 按顺序合并成一个音频文件（0.4.0） */
+data class Job(
     val fmt: FormatInfo, val channels: Int, val rate: String?, val bitrate: String?,
     val height: Int, val quality: Int, val keepAudio: Boolean,
     val items: List<ExportItem>,
+    val merge: Boolean = false,
 )
 
 class ExportResult(val name: String, val uri: Uri, val mime: String, val where: String)
@@ -645,14 +646,21 @@ object Studio {
 
     // ================= 导出 =================
 
-    fun startExport(all: Boolean) {
+    /** all：导出列表里全部文件；merge：把全部文件按列表顺序合并成一个音频文件 */
+    fun startExport(all: Boolean, merge: Boolean = false) {
         if (exporting) return
         if (!Ffmpeg.available(app)) { toast("找不到内置的 ffmpeg"); return }
-        val items = if (all) files.toList() else listOfNotNull(current)
-        if (items.isEmpty()) { toast(if (all) "请先添加文件" else "请先选择一个文件"); return }
+        val items = if (all || merge) files.toList() else listOfNotNull(current)
+        if (items.isEmpty()) { toast(if (all || merge) "请先添加文件" else "请先选择一个文件"); return }
+        val fmt = Formats.list[fmtIdx]
+        if (merge) {
+            if (items.size < 2) { toast("至少添加两个文件才能合并"); return }
+            if (fmt.video || fmt.copy) { toast("合并要选一种音频格式（MP3、WAV 等），在上面「格式」里选"); return }
+        }
         if (playing) pausePlay()
         val job = Job(
-            fmt = Formats.list[fmtIdx],
+            merge = merge,
+            fmt = fmt,
             channels = chIdx,
             rate = if (rateIdx > 0) Formats.rates[rateIdx] else null,
             bitrate = if (bitrateIdx > 0) Formats.bitrates[bitrateIdx] else null,
@@ -679,42 +687,13 @@ object Studio {
 
     /** 在导出服务的后台线程里跑；返回给通知用的一句话总结 */
     fun runBatch(job: Job, onProgress: (Float, String) -> Unit): String {
-        var ok = 0
-        var fail = 0
-        val n = job.items.size
         val t0 = System.currentTimeMillis()
-        val outDir = File(app.cacheDir, "out").apply { mkdirs() }
-        log("—— 开始导出 $n 个文件 ——")
-        for (i in 0 until n) {
-            if (cancelExport) break
-            val item = job.items[i]
-            log("[${i + 1}/$n] ${item.name}")
-            if (!item.path.exists()) { log("  × 文件不存在"); fail++; continue }
-            if (job.fmt.video && item.video == null) { log("  × 不是视频文件，跳过（音频文件请选 MP3 等音频格式）"); fail++; continue }
-            if (!job.fmt.video && item.audio == null) { log("  × 这个视频没有声音，无法导出音频"); fail++; continue }
-            val ext = outExt(job, item)
-            val outName = item.baseName + (if (item.edit != null) "_edit" else "") + ext
-            val tmp = File(outDir, "${System.nanoTime()}$ext")
-            val err = runOne(job, item, tmp, i, n) { frac, text ->
-                main.post { progress = frac; progressText = text }
-                onProgress(frac, text)
-            }
-            if (err == null) {
-                try {
-                    val r = if (job.fmt.video) saveToMovies(tmp, outName, ext) else saveToMusic(tmp, outName, ext)
-                    ok++
-                    log("  √ ${r.where}/${r.name}")
-                    main.post { results.add(0, r) }
-                } catch (e: Exception) {
-                    fail++
-                    log("  × 保存失败：${e.message ?: e}")
-                }
-            } else {
-                fail++
-                log(if (cancelExport) "  已停止" else "  × 失败：\n$err")
-            }
-            tmp.delete()
+        File(app.cacheDir, "out").mkdirs()
+        val report = { frac: Float, text: String ->
+            main.post { progress = frac; progressText = text }
+            onProgress(frac, text)
         }
+        val (ok, fail) = if (job.merge) runMerge(job, report) else runEach(job, report)
         val stopped = cancelExport
         val sec = (System.currentTimeMillis() - t0) / 1000.0
         log(String.format("完成：成功 %d，失败 %d，用时 %.1f 秒%s", ok, fail, sec, if (stopped) "（已手动停止）" else ""))
@@ -728,11 +707,129 @@ object Studio {
             if (!stopped) progress = 1f
             progressText = text
         }
+        val where = when {
+            job.fmt.split -> "「Movies/$OUT_DIR」和「音乐/$OUT_DIR」"
+            job.fmt.video -> "「Movies/$OUT_DIR」"
+            else -> "「音乐/$OUT_DIR」"
+        }
         return when {
             stopped -> "导出已停止，成功 $ok 个"
             fail > 0 -> "导出完成：成功 $ok 个，失败 $fail 个"
-            else -> "导出完成：$ok 个文件，在「" + (if (job.fmt.video) "Movies" else "音乐") + "/$OUT_DIR」"
+            else -> "导出完成：$ok 个文件，在$where"
         }
+    }
+
+    /** 第 k 步（共 steps 步）的进度回调：ffmpeg 报 0~1，换算成总进度和「label  45%」 */
+    private fun stepProgress(k: Int, steps: Int, label: String, report: (Float, String) -> Unit): (Double) -> Unit {
+        var last = -1
+        return { frac ->
+            val pct = (frac * 100).roundToInt()
+            if (pct != last) {
+                last = pct
+                report(((k + frac) / steps).toFloat(), "$label  $pct%")
+            }
+        }
+    }
+
+    /** 逐个文件导出；音视频分离时一个文件出两个。返回（成功数，失败数），按输出文件算 */
+    private fun runEach(job: Job, report: (Float, String) -> Unit): Pair<Int, Int> {
+        var ok = 0
+        var fail = 0
+        val n = job.items.size
+        log("—— 开始导出 $n 个文件 ——")
+        for (i in 0 until n) {
+            if (cancelExport) break
+            val item = job.items[i]
+            log("[${i + 1}/$n] ${item.name}")
+            if (!item.path.exists()) { log("  × 文件不存在"); fail++; continue }
+            if (job.fmt.split) {
+                if (item.video == null) { log("  × 不是视频文件，没有画面可分离"); fail++; continue }
+                if (item.audio == null) { log("  × 这个视频没有声音，不用分离"); fail++; continue }
+                // 画面：无损快剪去掉声音（存 Movies）；声音：保持原格式（存音乐）。剪辑和效果两边都照样套用
+                val vJob = job.copy(fmt = Formats.videoCopy, keepAudio = false)
+                if (exportOne(vJob, item, "_无声视频", stepProgress(2 * i, 2 * n, "${i + 1}/$n 画面", report))) ok++ else fail++
+                if (cancelExport) break
+                val aJob = job.copy(fmt = Formats.keepAudio)
+                if (exportOne(aJob, item, "_音频", stepProgress(2 * i + 1, 2 * n, "${i + 1}/$n 声音", report))) ok++ else fail++
+                continue
+            }
+            if (job.fmt.video && item.video == null) { log("  × 不是视频文件，跳过（音频文件请选 MP3 等音频格式）"); fail++; continue }
+            if (!job.fmt.video && item.audio == null) { log("  × 这个视频没有声音，无法导出音频"); fail++; continue }
+            if (exportOne(job, item, "", stepProgress(i, n, "${i + 1}/$n", report))) ok++ else fail++
+        }
+        return ok to fail
+    }
+
+    /** 导出一个文件并存进媒体库；suffix 加在文件名后面（扩展名前），成功返回 true */
+    private fun exportOne(job: Job, item: ExportItem, suffix: String, onFrac: (Double) -> Unit): Boolean {
+        val ext = outExt(job, item)
+        val outName = item.baseName + (if (item.edit != null) "_edit" else "") + suffix + ext
+        val tmp = File(app.cacheDir, "out/${System.nanoTime()}$ext")
+        val err = runFfmpeg(exportArgs(job, item, tmp), item.edit?.length ?: -1.0, onFrac)
+        return save(err, tmp, outName, ext, job.fmt.video)
+    }
+
+    /**
+     * 把列表里的文件按顺序接成一个音频文件（0.4.0）。每个文件先套用自己的剪辑和效果，
+     * 再统一采样率和声道（concat 要求一致；没选采样率时用 44100），最后按所选格式编码一次。
+     */
+    private fun runMerge(job: Job, report: (Float, String) -> Unit): Pair<Int, Int> {
+        log("—— 合并 ${job.items.size} 个文件 ——")
+        val items = job.items.filter { it.path.exists() && it.audio != null }
+        for (it in job.items) if (it !in items) log("  跳过 ${it.name}：" + if (!it.path.exists()) "文件不存在" else "没有声音")
+        if (items.size < 2) { log("  × 有声音的文件不到两个，没法合并"); return 0 to 1 }
+        val norm = "aformat=sample_fmts=fltp:sample_rates=${job.rate ?: "44100"}:channel_layouts=" +
+            (if (job.channels == 1) "mono" else "stereo")
+        val f = StringBuilder()
+        val a = arrayListOf("-hide_banner", "-nostdin", "-y")
+        items.forEachIndexed { k, it ->
+            log("  ${k + 1}. ${it.name}")
+            a += listOf("-i", it.path.path)
+            val e = it.edit
+            if (e == null) f.append("[$k:a]")
+            else f.append(Ffmpeg.buildFilter(e, false, true, null, k, "f${k}_")).append(";[f${k}_aout]")
+            f.append(norm).append("[m$k];")
+        }
+        for (k in items.indices) f.append("[m$k]")
+        f.append("concat=n=").append(items.size).append(":v=0:a=1[aout]")
+        a += listOf("-filter_complex", f.toString(), "-map", "[aout]")
+        a += encodeArgs(job)
+        val ext = job.fmt.ext
+        val outName = items[0].baseName + "_等${items.size}个合并" + ext
+        val tmp = File(app.cacheDir, "out/${System.nanoTime()}$ext")
+        a += listOf("-progress", "pipe:1", "-nostats", tmp.path)
+        val lens = items.map { it.edit?.length ?: it.srcDur }
+        val total = if (lens.all { it > 0 }) lens.sum() else -1.0
+        val err = runFfmpeg(a, total, stepProgress(0, 1, "合并", report))
+        return if (save(err, tmp, outName, ext, false)) 1 to 0 else 0 to 1
+    }
+
+    /** ffmpeg 跑完后：成功就存进「Movies」或「音乐」并加进结果列表；中间文件都删掉 */
+    private fun save(err: String?, tmp: File, outName: String, ext: String, video: Boolean): Boolean {
+        try {
+            if (err != null) {
+                log(if (cancelExport) "  已停止" else "  × 失败：\n$err")
+                return false
+            }
+            val r = if (video) saveToMovies(tmp, outName, ext) else saveToMusic(tmp, outName, ext)
+            log("  √ ${r.where}/${r.name}")
+            main.post { results.add(0, r) }
+            return true
+        } catch (e: Exception) {
+            log("  × 保存失败：${e.message ?: e}")
+            return false
+        } finally {
+            tmp.delete()
+        }
+    }
+
+    /** 音频编码参数：编码器、采样率、声道、比特率 */
+    private fun encodeArgs(job: Job): List<String> {
+        val a = arrayListOf("-c:a", job.fmt.codec)
+        job.rate?.let { a += listOf("-ar", it) }
+        if (job.channels > 0) a += listOf("-ac", job.channels.toString())
+        if (job.bitrate != null && !job.fmt.lossless) a += listOf("-b:a", job.bitrate)
+        return a
     }
 
     private fun outExt(job: Job, item: ExportItem): String = when {
@@ -801,39 +898,38 @@ object Studio {
         return a
     }
 
-    /** 导出一个文件，成功返回 null，失败返回 ffmpeg 最后几行输出 */
-    private fun runOne(job: Job, item: ExportItem, output: File, idx: Int, n: Int, onProgress: (Float, String) -> Unit): String? {
+    /** 导出一个文件的完整 ffmpeg 参数（最后一个是输出文件） */
+    private fun exportArgs(job: Job, item: ExportItem, output: File): List<String> {
         val e = item.edit
         val filter = e != null && !e.isPureTrim
+        // 视频的定位、滤镜、编码参数都在 videoArgs 里拼好
         val a = if (job.fmt.video) videoArgs(job, item, output) else arrayListOf("-hide_banner", "-nostdin", "-y", "-i", item.path.path)
-        if (job.fmt.video) {
-            // 参数已在 videoArgs 里拼好
-        } else if (filter) {
-            a += listOf("-filter_complex", Ffmpeg.buildFilter(e!!, false, true, null), "-map", "[aout]")
-        } else {
-            if (e != null) {
-                if (e.segs[0].a > 0.0005) a += listOf("-ss", Ffmpeg.t(e.segs[0].a))
-                if (e.segs[0].b < item.srcDur - 0.001) a += listOf("-to", Ffmpeg.t(e.segs[0].b))
+        if (!job.fmt.video) {
+            if (filter) {
+                a += listOf("-filter_complex", Ffmpeg.buildFilter(e!!, false, true, null), "-map", "[aout]")
+            } else {
+                if (e != null) {
+                    if (e.segs[0].a > 0.0005) a += listOf("-ss", Ffmpeg.t(e.segs[0].a))
+                    if (e.segs[0].b < item.srcDur - 0.001) a += listOf("-to", Ffmpeg.t(e.segs[0].b))
+                }
+                a += listOf("-vn", "-sn", "-dn")
             }
-            a += listOf("-vn", "-sn", "-dn")
-        }
-        if (job.fmt.video) {
-            // 视频的编码参数也在 videoArgs 里
-        } else if (job.fmt.copy) {
-            if (!filter) a += listOf("-c:a", "copy")
-            else log("  已剪辑/加效果，按原格式重新编码")
-        } else {
-            a += listOf("-c:a", job.fmt.codec)
-            job.rate?.let { a += listOf("-ar", it) }
-            if (job.channels > 0) a += listOf("-ac", job.channels.toString())
-            if (job.bitrate != null && !job.fmt.lossless) a += listOf("-b:a", job.bitrate)
+            if (job.fmt.copy) {
+                if (!filter) a += listOf("-c:a", "copy")
+                else log("  已剪辑/加效果，按原格式重新编码")
+            } else {
+                a += encodeArgs(job)
+            }
         }
         a += listOf("-progress", "pipe:1", "-nostats", output.path)
+        return a
+    }
 
+    /** 跑一次导出用的 ffmpeg：成功返回 null，失败返回最后几行输出。total = 输出时长，不知道就传负数（改用 ffmpeg 报的输入时长） */
+    private fun runFfmpeg(a: List<String>, total: Double, onFrac: (Double) -> Unit): String? {
+        val output = File(a.last())
         var duration = -1.0
-        val outLen = e?.length ?: -1.0
         val tail = ArrayDeque<String>()
-        var lastPct = -1
         val code = try {
             Ffmpeg.run(
                 app, a,
@@ -843,15 +939,8 @@ object Studio {
                     if (duration < 0) Ffmpeg.parseDuration(line)?.let { duration = it }
                 },
                 onTime = { t ->
-                    val total = if (outLen > 0) outLen else duration
-                    if (total > 0) {
-                        val frac = min(1.0, t / total)
-                        val pct = (frac * 100).roundToInt()
-                        if (pct != lastPct) {
-                            lastPct = pct
-                            onProgress(((idx + frac) / n).toFloat(), "${idx + 1}/$n  $pct%")
-                        }
-                    }
+                    val d = if (total > 0) total else duration
+                    if (d > 0) onFrac(min(1.0, t / d))
                 },
             )
         } catch (ex: Exception) {
