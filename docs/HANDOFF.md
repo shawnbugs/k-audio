@@ -50,10 +50,21 @@
   用户 2026-11-07 已向 GitHub Support 提交工单（单位是误填），等回复；11-08 重跑仍 startup_failure；
   11-09 发现「预算和提醒」里 Actions 等 5 项预算都是 $0 且 Usage blocked，想改成 $1 要先绑卡、绑卡又被贸易管制挡回，
   改不了，别再让用户试。11-09 用户把仓库改成公开试过，**公开仓库也跑不了**（job 注释「your account is locked due to a billing issue」），
-  建议改回私有。出路：等工单，或本地 WSL 编译（Ubuntu 24.04 已装，评估见会话）——
+  建议改回私有（但官方说受限账号公开后可能改不回私有）。被锁根源大概率是：用户以前让别人代办 GitHub 学生认证（为免费 Copilot），
+  学校填了北京大学（美国实体清单）；已建议用户在工单里照实补充说明、请客服去掉这个学校关联，**别改填别的假学校**。
+  **2026-11-09 起本地 WSL 打包**（见下面「本地打包」）。出路：等工单，或本地 WSL 编译（Ubuntu 24.04 已装，评估见会话）——
   **代码还没编译过，ffmpeg 新脚本也没跑过**。用户处理好账单后：`gh workflow run android.yml -R shawnbugs/k-audio --ref main`，
   看 ffmpeg job 能否过（x265 的 NEON 汇编编不过会自动退纯 C，日志里有「!!!!」提示），再修 Kotlin 编译错误。
   验证重点：取画面速度（每帧起一次 ffmpeg）、H.265 在手机上的导出速度、无声视频、导出到 Movies/K剪音 相册能否看到。
+- **本地打包（2026-11-09 搭，GitHub 解锁前的主路线）**：WSL `Ubuntu-24.04`（磁盘 `F:\WSL\Ubuntu-24.04\ext4.vhdx`），
+  `C:\Users\Administrator\.wslconfig` 设了 `networkingMode=mirrored`（WSL 才能用 Clash 7897）+ `autoMemoryReclaim=gradual`。
+  三个脚本在 `tools/`：`wsl-root-packages.sh`（root 装 apt 包，含 JDK 17、gcc）→ `wsl-setup.sh`（~/android-sdk：android-36、
+  build-tools 35、NDK r30；~/.gradle 代理）→ `wsl-build.sh`（同步到 ~/build/k-audio、按 build.sh 哈希缓存 ffmpeg、assembleRelease、
+  APK 复制到 `apk\KAudio-<版本>.apk`）。用法：`wsl -d Ubuntu-24.04 -- bash /mnt/d/AiWork/Android/k-audio-app/tools/wsl-build.sh`，
+  日志重定向到 ~/build.log 再 grep。用户要求：不用时 `wsl --shutdown` 关掉；GitHub 解封后本地环境停用。
+  **没开稀疏 VHD**（WSL 提示该功能可能损坏数据，已关回去）。11-09 进度：lame/ogg/vorbis/opus/x264/x265 已编过，
+  ffmpeg configure 缺宿主 gcc 失败 → 已补 gcc 到脚本、在装；装完重跑 wsl-build.sh，再修 Kotlin 编译错误（0.3.0 还没编过）。
+  脚本还没提交。
 - 之前（2026-11-06）：0.1.0（暖色，照 K功课）出过一版后，用户要求换风格；**0.2.0 深色录音棚风**
   CI 绿灯（run `42173807066`），`apk\KAudio-0.2.0.apk`（约 32.7 MB，含 19.2 MB `libffmpeg.so`）已 adb 装到用户手机。
   新配色和图标还没在手机上看过效果，功能也还没真机验证，等用户反馈。
