@@ -1,6 +1,6 @@
 # K剪音 交接文档
 
-> 写于 2026-11-06，2026-11-09 更新；版本 **0.5.2**（versionCode 7；GitHub Actions 因账号被锁跑不了，2026-11-09 在本地 WSL 编出 `apk\KAudio-0.5.2.apk`，11-09 已 adb install -r 装到用户手机，等反馈）。**新会话先读本文，再读 [README](../README.md)**。
+> 写于 2026-11-06，2026-11-10 更新；版本 **0.5.3**（versionCode 8；GitHub Actions 因账号被锁跑不了，2026-11-10 在本地 WSL 编出 `apk\KAudio-0.5.3.apk`，**还没装到手机**，手机上仍是 0.5.2）。**新会话先读本文，再读 [README](../README.md)**。
 > README 讲「功能现状、关键实现、构建」，本文讲「怎么接手、用户要什么、为什么这么做、还有什么没做」，两份不重复。
 
 ## 1. 一分钟上手
@@ -42,13 +42,25 @@
 
 ## 4. 没做完 / 没验证的
 
-- **待修（2026-11-10 真机查出来的，还没动）：AV1 视频导不出视频**。用户导出 `城中村闲逛.mp4`（640x480 30fps，**画面 AV1**、声音 Opus，
+- **0.5.3（2026-11-10）修好 AV1 视频导不出视频，已编出 `apk\KAudio-0.5.3.apk`（versionCode 8，35.0 MB），还没装到手机**（用户说「直接装」才 adb install -r）：
+  `build.sh` 加 dav1d 1.5.4（meson + ninja 静态编译，cross file 写在 `work/android-aarch64.ini`；meson / ninja 和 x265 要的 CMake 3.x
+  一起装在 `work/venv`，不动系统；**NEON 汇编编进去了**：`HAVE_ASM 1`，dotprod / i8mm / SVE 扩展运行时按 CPU 检测；编不过会退纯 C），
+  ffmpeg `--enable-libdav1d`，`libffmpeg.so` 23.6 → 24.3 MB，NEEDED 仍只有 libm/libz/libdl/libc。ffmpeg 遇到 AV1 自动优先选 libdav1d
+  （`av1 (libdav1d) -> h264 (libx264)`），不用改 App 的命令。
+  `Studio.runFfmpeg` 失败日志改成：先列 stderr 里像报错的行（error / invalid / failed / not / no such / unknown… 不分大小写，去重，最多 8 条，
+  按出现顺序，第一条往往是根因），再补最后 6 行。About 里「内置 FFmpeg」那句加了 dav1d，README 功能表注明支持 AV1。
+  **真机验证（11-10）**：从 0.5.3 APK 里解出的 `libffmpeg.so`（哈希与 WSL 产物一致）推到 /data/local/tmp，拿用户的 `城中村闲逛.mp4`
+  （AV1 640x480 30fps + Opus，64.2 秒）跑 App 同款 H.264 480p 导出：1925 帧、4.88 倍速、13 秒出完，输出 H.264 High 640x480 + AAC；
+  App 同款取帧（32.5 秒处、BMP 管道）640x480 画面正常。测完已删（/data/local/tmp 原有的 dalvik-cache 不是我们的，没动）。
+  **没验证的**：App 界面里实际导出 / 取画面预览 / 逐帧（只在命令行跑了同款命令）、AV1 的分离和合并、更高分辨率（1080p / 4K）AV1 的解码速度、
+  新失败日志在 App 里的样子（没造失败场景）。
+- 以下是 0.5.3 之前记的问题经过。**AV1 视频导不出视频**（2026-11-10 真机查出来的）。用户导出 `城中村闲逛.mp4`（640x480 30fps，**画面 AV1**、声音 Opus，
   手机上在 `/storage/emulated/0/AAAFile/`）为 H.264 480p，App 只提示失败、看不出原因。用 adb 每 0.3 秒 `ps -A -o PID,ARGS` 抓到 App 的
   ffmpeg 命令，照原样在 /data/local/tmp 重跑：`[av1] Get current frame error … Error submitting packet to decoder: Function not implemented`，
   一帧画面都解不出来。原因：ffmpeg 自带的 `av1` 解码器只是硬件解码的壳子，`build.sh` 里 `--disable-hwaccels` 又没有软件 AV1 解码器。
   修法：`ffmpeg-android/build.sh` 加 **libdav1d**（meson + ninja 交叉编译，`--enable-libdav1d`；改了 build.sh 会重编 ffmpeg，约 15 分钟以上），
   APK 会再大一点。同样影响：AV1 视频的取画面预览、视频导出、分离、合并（只导声音不受影响）。
-  另外 App 的失败日志只取 stderr 最后 10 行，真正的错误被「Qavg」「Conversion failed!」这类行挤掉了：顺手改成优先保留含 error / Error 的行。
+  另外 App 的失败日志只取 stderr 最后 10 行，真正的错误被「Qavg」「Conversion failed!」这类行挤掉了（0.5.3 已改，见上）。
 - **0.5.2（2026-11-09）用用户自己设计的图标，已编出 `apk\KAudio-0.5.2.apk`（versionCode 7），11-09 已 adb install -r 装到用户手机（覆盖 0.5.0）**：用户发来自己画的图
   （墨黑底、上下两道薄荷青横条、青色斜带左下→右上压在最上面、紫色斜带左上→右下压在横条下面），说「用这个吧」。
   照着换成矢量坐标（Pillow 画出来和原图并排比过，比例一致），4 个 drawable 全换；单色和通知栏小图标里紫色那条用半透明区分。
@@ -116,6 +128,7 @@
   「Remote host terminated the handshake」整次构建失败；阿里云镜像直连快得多。所以 `wsl-root-packages.sh` 改成从阿里云下 .deb
   （不改系统软件源），`wsl-setup.sh` 写 `~/.gradle/init.d/aliyun-mirror.gradle`（阿里云镜像排前面、原仓库兜底，nonProxyHosts 加了阿里云）。
   11-09 编出 0.3.0：ffmpeg 首次连依赖库约 15 分钟，之后按 build.sh 哈希走缓存（`~/build/ffmpeg-cache`）；Gradle 首次约 7 分钟。
+  11-10 编 0.5.3（加 dav1d 重编 ffmpeg，源码包已在 `work/src` 不用再下）：ffmpeg 全部约 5 分钟，Gradle 约 2 分钟，整次不到 10 分钟。
   看结果以日志里出现 `OK -> …/apk/KAudio-<版本>.apk` 为准（ffmpeg 那步也会打一行 `OK -> …/out/ffmpeg`，别看错）。
   在 PowerShell 里调 `wsl … bash -c "…; echo exit=\$?"` 时 `$?` 会被 PowerShell 或 wsl 外层 shell 先展开，记下的 exit 不可信。
 - 之前（2026-11-06）：0.1.0（暖色，照 K功课）出过一版后，用户要求换风格；**0.2.0 深色录音棚风**

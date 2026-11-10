@@ -1053,17 +1053,22 @@ object Studio {
         return a
     }
 
-    /** 跑一次导出用的 ffmpeg：成功返回 null，失败返回最后几行输出。total = 输出时长，不知道就传负数（改用 ffmpeg 报的输入时长） */
+    /** 跑一次导出用的 ffmpeg：成功返回 null，失败返回报错行 + 最后几行输出。total = 输出时长，不知道就传负数（改用 ffmpeg 报的输入时长） */
     private fun runFfmpeg(a: List<String>, total: Double, onFrac: (Double) -> Unit): String? {
         val output = File(a.last())
         var duration = -1.0
+        // 真正的原因常在中间（比如解码器报错），最后几行只剩「Conversion failed!」之类；所以报错行单独留最先出现的几条
+        val errs = ArrayList<String>()
         val tail = ArrayDeque<String>()
         val code = try {
             Ffmpeg.run(
                 app, a,
                 started = { exportProc = it; if (cancelExport) Ffmpeg.kill(it) },
                 onErr = { line ->
-                    synchronized(tail) { tail.addLast(line); if (tail.size > 10) tail.removeFirst() }
+                    synchronized(tail) {
+                        if (errs.size < 8 && ERR_LINE.containsMatchIn(line) && line !in errs) errs += line
+                        tail.addLast(line); if (tail.size > 6) tail.removeFirst()
+                    }
                     if (duration < 0) Ffmpeg.parseDuration(line)?.let { duration = it }
                 },
                 onTime = { t ->
@@ -1077,8 +1082,14 @@ object Studio {
         }
         exportProc = null
         if (code == 0 && !cancelExport && output.length() > 0) return null
-        return synchronized(tail) { "  " + tail.joinToString("\n  ") }
+        return synchronized(tail) { "  " + (errs + tail.filter { it !in errs }).joinToString("\n  ") }
     }
+
+    /** ffmpeg 输出里像报错的行 */
+    private val ERR_LINE = Regex(
+        "error|invalid|failed|unable|cannot|could not|\\bnot\\b|no such|unknown|unsupported|denied",
+        RegexOption.IGNORE_CASE,
+    )
 
     /** 存进公共「音乐/K剪音」目录（Android 10+ 不需要存储权限）；系统不收的类型改存「下载/K剪音」 */
     private fun saveToMusic(src: File, name: String, ext: String): ExportResult {

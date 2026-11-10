@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # 用 Android NDK 交叉编译 ffmpeg 可执行文件（arm64-v8a），带 MP3 / Vorbis / Opus 音频编码器，
-# 和 x264 / x265 视频编码器（0.3.0 起，移植 PC 版的视频剪辑；x264/x265 是 GPL，整个 ffmpeg 随之变成 GPL，自用无所谓）。
+# 和 x264 / x265 视频编码器（0.3.0 起，移植 PC 版的视频剪辑；x264/x265 是 GPL，整个 ffmpeg 随之变成 GPL，自用无所谓），
+# 以及 dav1d AV1 解码器（0.5.3 起，手机录屏 / 网上下的 AV1 视频要靠它）。
 # 在 Linux 上跑（GitHub Actions 的 ubuntu-latest 自带 NDK）；产物 out/ffmpeg，由 CI 复制成
 # app/src/main/jniLibs/arm64-v8a/libffmpeg.so。本文件一改，CI 缓存键就变，会重新编译。
 set -euo pipefail
@@ -12,6 +13,7 @@ OGG_VER=1.3.5
 VORBIS_VER=1.3.7
 OPUS_VER=1.5.2
 X265_VER=4.1                 # x264 没有正式版号，用官方 stable 分支
+DAV1D_VER=1.5.4              # AV1 软解（0.5.3 起）
 
 NDK="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_HOME:-}}"
 [ -d "$NDK" ] || { echo "找不到 NDK（ANDROID_NDK_LATEST_HOME / ANDROID_NDK_HOME）"; exit 1; }
@@ -85,6 +87,58 @@ echo "==== opus $OPUS_VER"
 fetch "https://downloads.xiph.org/releases/opus/opus-$OPUS_VER.tar.gz" "opus-$OPUS_VER"
 autotools_build "opus-$OPUS_VER" --disable-doc --disable-extra-programs
 
+# 自带的 Python 工具：x265 要 CMake 3.x（CMake 4 不认它的老策略），dav1d 要 meson + ninja；都装进 venv，不动系统
+if [ ! -x "$WORK/venv/bin/cmake" ] || [ ! -x "$WORK/venv/bin/meson" ] || [ ! -x "$WORK/venv/bin/ninja" ]; then
+    [ -x "$WORK/venv/bin/pip" ] || python3 -m venv "$WORK/venv"
+    "$WORK/venv/bin/pip" install -q "cmake>=3.20,<4" meson ninja
+fi
+
+echo "==== dav1d $DAV1D_VER"
+# ffmpeg 自带的 av1 解码器只是硬件解码的壳子（这里又 --disable-hwaccels），
+# 没有 dav1d 的话 AV1 视频一帧画面都解不出来（报 Function not implemented）
+if ! fetch "https://downloads.videolan.org/pub/videolan/dav1d/$DAV1D_VER/dav1d-$DAV1D_VER.tar.xz" "dav1d-$DAV1D_VER"; then
+    rm -rf "$SRC/dav1d-$DAV1D_VER"
+    curl -fL --retry 4 --retry-delay 5 -o "$SRC/dav1d-gl.tar.bz2" "https://code.videolan.org/videolan/dav1d/-/archive/$DAV1D_VER/dav1d-$DAV1D_VER.tar.bz2"
+    tar -xf "$SRC/dav1d-gl.tar.bz2" -C "$SRC"   # 解出来同样是 dav1d-<版本>/
+fi
+# meson 交叉编译描述：编译器用 NDK 自带目标的包装脚本
+cat > "$WORK/android-aarch64.ini" <<EOF
+[binaries]
+c = '$CC'
+cpp = '$CXX'
+ar = '$AR'
+strip = '$STRIP'
+nm = '$NM'
+pkg-config = 'pkg-config'
+
+[host_machine]
+system = 'android'
+cpu_family = 'aarch64'
+cpu = 'armv8-a'
+endian = 'little'
+EOF
+dav1d_build() { # dav1d_build true|false（NEON 汇编）
+    local bdir="$SRC/dav1d-build"
+    rm -rf "$bdir"
+    (
+        export PATH="$WORK/venv/bin:$PATH"
+        meson setup "$bdir" "$SRC/dav1d-$DAV1D_VER" \
+            --cross-file "$WORK/android-aarch64.ini" \
+            --prefix "$PREFIX" --libdir lib \
+            --buildtype release --default-library static -Db_staticpic=true \
+            -Denable_asm="$1" -Denable_tools=false -Denable_examples=false \
+            -Denable_tests=false -Denable_docs=false
+        ninja -C "$bdir"
+        ninja -C "$bdir" install
+    )
+}
+# 先带 NEON 汇编编（AV1 软解很吃 CPU）；编不过就退回纯 C
+if ! dav1d_build true; then
+    echo "!!!! dav1d 带汇编编译失败，改用纯 C 版本（AV1 解码会慢很多）"
+    dav1d_build false
+fi
+cat "$PREFIX/lib/pkgconfig/dav1d.pc"
+
 echo "==== x264 (stable)"
 if ! fetch "https://code.videolan.org/videolan/x264/-/archive/stable/x264-stable.tar.bz2" "x264-stable"; then
     # videolan 偶尔连不上，退到 GitHub 镜像的同名分支
@@ -104,11 +158,7 @@ fi
 
 echo "==== x265 $X265_VER"
 fetch "https://bitbucket.org/multicoreware/x265_git/downloads/x265_$X265_VER.tar.gz" "x265_$X265_VER"
-# x265 的 CMakeLists 还写着 cmake 2.8 时代的策略，CMake 4 会直接报错；单独装一个 3.x 用
-if [ ! -x "$WORK/venv/bin/cmake" ]; then
-    python3 -m venv "$WORK/venv"
-    "$WORK/venv/bin/pip" install -q "cmake>=3.20,<4"
-fi
+# x265 的 CMakeLists 还写着 cmake 2.8 时代的策略，CMake 4 会直接报错；用上面 venv 里的 3.x
 x265_build() { # x265_build ON|OFF（汇编）
     local bdir="$SRC/x265-build"
     rm -rf "$bdir"
@@ -161,6 +211,7 @@ fi
         --disable-avdevice --disable-devices --disable-network --disable-hwaccels \
         --enable-gpl \
         --enable-libmp3lame --enable-libvorbis --enable-libopus --enable-libx264 --enable-libx265 \
+        --enable-libdav1d \
         --disable-encoders \
         --enable-encoder=libmp3lame,libvorbis,libopus,aac,flac,alac,ac3,wmav2,pcm_s16le,pcm_s16be,pcm_s24le,pcm_s24be,pcm_f32le \
         --enable-encoder=libx264,libx265,bmp \
