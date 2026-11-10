@@ -1,6 +1,6 @@
 # K剪音 交接文档
 
-> 写于 2026-11-06，2026-11-10 更新；版本 **0.5.3**（versionCode 8；GitHub Actions 因账号被锁跑不了，2026-11-10 在本地 WSL 编出 `apk\KAudio-0.5.3.apk`，**还没装到手机**，手机上仍是 0.5.2）。**新会话先读本文，再读 [README](../README.md)**。
+> 写于 2026-11-06，2026-11-10 更新；版本 **0.5.3**（versionCode 8；GitHub Actions 因账号被锁跑不了，2026-11-10 在本地 WSL 编出 `apk\KAudio-0.5.3.apk`，11-10 已 adb install -r 装到用户手机，等反馈）。**新会话先读本文，再读 [README](../README.md)**。
 > README 讲「功能现状、关键实现、构建」，本文讲「怎么接手、用户要什么、为什么这么做、还有什么没做」，两份不重复。
 
 ## 1. 一分钟上手
@@ -42,7 +42,7 @@
 
 ## 4. 没做完 / 没验证的
 
-- **0.5.3（2026-11-10）修好 AV1 视频导不出视频，已编出 `apk\KAudio-0.5.3.apk`（versionCode 8，35.0 MB），还没装到手机**（用户说「直接装」才 adb install -r）：
+- **0.5.3（2026-11-10）修好 AV1 视频导不出视频，已编出 `apk\KAudio-0.5.3.apk`（versionCode 8，35.0 MB），11-10 用户说「直接装」，已 adb install -r 装到手机（覆盖 0.5.2）**：
   `build.sh` 加 dav1d 1.5.4（meson + ninja 静态编译，cross file 写在 `work/android-aarch64.ini`；meson / ninja 和 x265 要的 CMake 3.x
   一起装在 `work/venv`，不动系统；**NEON 汇编编进去了**：`HAVE_ASM 1`，dotprod / i8mm / SVE 扩展运行时按 CPU 检测；编不过会退纯 C），
   ffmpeg `--enable-libdav1d`，`libffmpeg.so` 23.6 → 24.3 MB，NEEDED 仍只有 libm/libz/libdl/libc。ffmpeg 遇到 AV1 自动优先选 libdav1d
