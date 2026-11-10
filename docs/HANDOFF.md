@@ -42,6 +42,13 @@
 
 ## 4. 没做完 / 没验证的
 
+- **待修（2026-11-10 真机查出来的，还没动）：AV1 视频导不出视频**。用户导出 `城中村闲逛.mp4`（640x480 30fps，**画面 AV1**、声音 Opus，
+  手机上在 `/storage/emulated/0/AAAFile/`）为 H.264 480p，App 只提示失败、看不出原因。用 adb 每 0.3 秒 `ps -A -o PID,ARGS` 抓到 App 的
+  ffmpeg 命令，照原样在 /data/local/tmp 重跑：`[av1] Get current frame error … Error submitting packet to decoder: Function not implemented`，
+  一帧画面都解不出来。原因：ffmpeg 自带的 `av1` 解码器只是硬件解码的壳子，`build.sh` 里 `--disable-hwaccels` 又没有软件 AV1 解码器。
+  修法：`ffmpeg-android/build.sh` 加 **libdav1d**（meson + ninja 交叉编译，`--enable-libdav1d`；改了 build.sh 会重编 ffmpeg，约 15 分钟以上），
+  APK 会再大一点。同样影响：AV1 视频的取画面预览、视频导出、分离、合并（只导声音不受影响）。
+  另外 App 的失败日志只取 stderr 最后 10 行，真正的错误被「Qavg」「Conversion failed!」这类行挤掉了：顺手改成优先保留含 error / Error 的行。
 - **0.5.2（2026-11-09）用用户自己设计的图标，已编出 `apk\KAudio-0.5.2.apk`（versionCode 7），11-09 已 adb install -r 装到用户手机（覆盖 0.5.0）**：用户发来自己画的图
   （墨黑底、上下两道薄荷青横条、青色斜带左下→右上压在最上面、紫色斜带左上→右下压在横条下面），说「用这个吧」。
   照着换成矢量坐标（Pillow 画出来和原图并排比过，比例一致），4 个 drawable 全换；单色和通知栏小图标里紫色那条用半透明区分。
